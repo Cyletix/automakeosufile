@@ -1,0 +1,46 @@
+{
+    "editor.lineDecorationsWidth": 0,
+    "cmake.configureOnOpen": false,
+    "sqltools.connections": [
+        {
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "name": "postgres",
+            "database": "postgres",
+            "username": "postgres",
+            "password": "shen124357689"
+        },
+        {
+            "previewLimit": 50,
+            "server": "172.16.0.34",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "name": "森亿",
+            "database": "数据库",
+            "username": "postgres",
+            "password": "765@#sy666"
+        },
+        {
+            "previewLimit": 50,
+            "server": "172.168.200.57",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "name": "洛阳中心",
+            "database": "hdr",
+            "username": "postgres",
+            "password": "765sy666"
+        }
+    ],
+    "editor.detectIndentation": false,
+    "editor.tabSize": 4,
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": true,
+    "svn.ignoreMissingSvnWarning": true,
+    "[python]": {
+        "editor.formatOnSaveMode": "file",
+        "editor.defaultFormatter": "ms-python.black-formatter"
+    },
+    "python.formatting.provider": "none"
+}
