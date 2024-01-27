@@ -3,4 +3,3 @@ pandas
 librosa
 matplotlib
 plotly
-mp3_to_wav

@@ -8,13 +8,15 @@ FilePath: \AutoMakeosuFile\main.py
 import os
 import numpy as np
 import librosa
+import pywt
 import matplotlib.pyplot as plt
 
 plt.style.use("dark_background")  # 设置plot风格
-import binarize
 from sklearn.decomposition import PCA
-import bpm_calculate
-from mp3_to_wav import mp32wav
+
+from algorithm import binarize
+from algorithm import bpm_calculate
+from algorithm.mp3_to_wav import mp32wav
 
 # import cv2
 # from IPython.display import Audio
@@ -27,10 +29,11 @@ from mp3_to_wav import mp32wav
 # filename = 'E:\osu!\Songs\DJ Genki VS Camellia feat moimoi - YELL! [6k]\YELL!.wav'
 # filename = 'D:\OneDrive\Code\GitHub\AutoMakeosuFile\VELVET CLOAK - Ryunosuke Kudo An - Immobility.mp3'
 # filename = 'dragon_girl.wav'
-filename = "NIGHTFALL.wav"
+filename = "audio/NIGHTFALL.mp3"
 
 if not os.path.exists(filename):
     mp32wav(filename)
+
 y, sr = librosa.load(filename)
 
 # Audio(data=y,rate=sr)
