@@ -9,7 +9,7 @@ osu自动做谱程序, 对音频文件进行分析后, 自动生成铺面, 由�
 
 
 ## preview
-[[prdview.webp]]
+[[preview.jpg]]
 
 ---
 
