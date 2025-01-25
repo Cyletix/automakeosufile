@@ -18,7 +18,9 @@ from sklearn.decomposition import PCA
 from algorithm.binarize import simple_binarize
 from algorithm.bpm_calculate import get_bpm
 from algorithm.windows_size import calculate_windows_size
+from algorithm.custom_onset_detect import my_one_detect
 from fileprocess.mp3_to_wav import mp32wav
+from fileprocess.osu_file_make import OSUGenerator
 from plotfunction.stft_plotly import plotly_plot
 
 # import cv2
@@ -150,3 +152,30 @@ first_beat_time, last_beat_time = librosa.frames_to_time((beats[0], beats[-1]), 
 # print("Tempo 2:", 60/((last_beat_time-first_beat_time)/(len(beats)-1)))
 tempo2 = 60 / ((last_beat_time - first_beat_time) / (len(beats) - 1))
 bpm = int(tempo2)
+
+# %% Generate osu! beatmap
+from fileprocess.osu_file_make import OSUGenerator
+from fileprocess.osu_file_parse import OSUData
+
+# Create beatmap
+beatmap = OSUGenerator()
+beatmap.set_audio_file(filename)
+beatmap.set_metadata(
+    title="Auto Generated",
+    artist="Unknown",
+    creator="AutoMakeosuFile",
+    version="Auto v1.0",
+)
+beatmap.set_difficulty(hp=5, cs=4, od=5, ar=5)
+
+# Generate hit objects from onsets
+beatmap.generate_from_analysis(
+    bpm=bpm,
+    hit_times=onset_times * 1000,  # Convert to milliseconds
+    duration=librosa.get_duration(y=y, sr=sr),
+)
+
+# Save beatmap
+output_file = os.path.splitext(filename)[0] + ".osu"
+beatmap.save(output_file)
+print(f"Saved beatmap to {output_file}")

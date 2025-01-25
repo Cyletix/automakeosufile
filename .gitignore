@@ -1,0 +1,7 @@
+__pycache__
+.venv
+.vscode
+*.pdf
+*.osu
+*.mp3
+*.wav
