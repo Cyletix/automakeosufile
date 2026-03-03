@@ -1,11 +1,3 @@
-"""
-Description: bpm,first/last beat time calculate by librosa
-Author: Cyletix
-Date: 2023-03-16 19:15:49
-LastEditTime: 2023-08-04 18:16:56
-FilePath: \AutoMakeosuFile\bpm_calculate.py
-"""
-
 import librosa
 
 

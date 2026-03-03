@@ -1,11 +1,3 @@
-"""
-Description: OSU beatmap generator
-Author: Cyletix
-Date: 2023-03-21 03:07:31
-LastEditTime: 2023-08-04 23:16:12
-FilePath: \AutoMakeosuFile\osu_file_make.py
-"""
-
 import os
 
 
@@ -36,10 +28,21 @@ class OSUGenerator:
         self.metadata["AudioFilename"] = os.path.basename(filename)
 
     def set_metadata(self, title, artist, creator, version):
-        self.metadata["Title"] = title
-        self.metadata["Artist"] = artist
-        self.metadata["Creator"] = creator
-        self.metadata["Version"] = version
+        """Set metadata for the beatmap."""
+        self.metadata.update(
+            {
+                "Title": title,
+                "TitleUnicode": title,
+                "Artist": artist,
+                "ArtistUnicode": artist,
+                "Creator": creator,
+                "Version": version,
+                "Source": "",
+                "Tags": "",
+                "BeatmapID": 0,
+                "BeatmapSetID": -1,
+            }
+        )
 
     def set_difficulty(self, hp, cs, od, ar):
         self.difficulty["HPDrainRate"] = hp
@@ -47,14 +50,44 @@ class OSUGenerator:
         self.difficulty["OverallDifficulty"] = od
         self.difficulty["ApproachRate"] = ar
 
-    def generate_from_analysis(self, bpm, hit_times, duration):
+    def generate_from_analysis(
+        self,
+        bpm,
+        hit_times,
+        duration,
+        chroma_data=None,
+        sr=22050,
+        hop_length=512,
+        density=0.8,
+        pattern_variation=0.3,
+        column_count=4,
+    ):
         # Add timing point
         self.timing_points.append([0, 60000 / bpm, 4, 2, 1, 60, 1, 0])
 
         # Add hit objects
+        width = 512 / column_count
         for time in hit_times:
-            x = 256  # Center position
-            y = 192  # Center position
+            if chroma_data is not None:
+                # Convert time to frame index
+                frame_index = int(time / 1000 * sr / hop_length)
+                if frame_index < chroma_data.shape[1]:
+                    # Get the chroma features for the frame
+                    chroma_frame = chroma_data[:, frame_index]
+                    # Find the active pitch classes
+                    active_pitches = [i for i, v in enumerate(chroma_frame) if v == 1]
+                    if active_pitches:
+                        for pitch in active_pitches:
+                            column = pitch % column_count
+                            x = int(width * (column + 0.5))
+                            y = 192
+                            self.hit_objects.append([x, y, int(time), 1, 0, "0:0:0:0:"])
+                        continue
+
+            # Fallback to random column if no pitch is detected or no chroma data
+            column = int(time / 100) % column_count
+            x = int(width * (column + 0.5))
+            y = 192  # Fixed y position for mania
             self.hit_objects.append([x, y, int(time), 1, 0, "0:0:0:0:"])
 
     def save(self, filename):
@@ -64,7 +97,13 @@ class OSUGenerator:
             f.write("[General]\n")
             f.write(f"AudioFilename: {self.metadata['AudioFilename']}\n")
             f.write(f"PreviewTime: {self.metadata['PreviewTime']}\n")
-            f.write("Mode: 0\n\n")
+            f.write("Mode: 3\n")
+            f.write("Countdown: 1\n")
+            f.write("SampleSet: Soft\n")
+            f.write("StackLeniency: 0.7\n")
+            f.write("LetterboxInBreaks: 0\n")
+            f.write("SpecialStyle: 0\n")
+            f.write("WidescreenStoryboard: 0\n\n")
 
             # Write metadata section
             f.write("[Metadata]\n")

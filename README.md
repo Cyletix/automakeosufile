@@ -88,3 +88,157 @@ cent32_interval=bpm/60*1000/16
 ~由于cv2目前不支持python11, 所以用python10比较稳~
 
 现在好像没用到cv2, 应该没有啥限制
+
+---
+
+# 项目重构和优化 (v2.0)
+%% 2026/03/04 %%
+项目经过重构，现在具有模块化的结构和改进的算法。
+
+## 新项目结构
+
+```
+AutoMakeosuFile/
+├── automakeosufile/     # 新模块化包（核心功能）
+│   ├── __init__.py      # 包初始化
+│   ├── config.py        # 配置文件
+│   ├── audio_processing.py      # 音频处理模块
+│   ├── feature_extraction.py    # 特征提取模块
+│   ├── beatmap_generator.py     # 谱面生成模块
+│   └── main.py          # 命令行入口
+├── archive/             # 归档的旧代码（参考用）
+├── audio/               # 音频文件
+├── docs/                # 设计文档
+├── output/              # 输出文件
+├── picture/             # 图片
+├── test/                # 测试文件
+├── 密度修正专项/         # 密度修正实验
+├── main.py              # 旧主程序（参考）
+├── main_old.py          # 更旧版本（历史）
+├── README.md            # 项目说明
+└── requirements.txt     # 依赖
+```
+
+## 新版本特性
+
+### 1. 模块化设计
+- **audio_processing.py**: Mel频谱 + 自适应二值化
+- **feature_extraction.py**: BPM检测 + 节拍对齐 + 轨道映射
+- **beatmap_generator.py**: 完整的.osu文件生成
+
+### 2. 算法改进
+- **二值化**: 从固定阈值0.9 → 自适应阈值（激活率78.9%）
+- **频谱分析**: 从Chroma CQT → Mel频谱（更适合音乐分析）
+- **节拍对齐**: 新增BPM检测和节拍网格对齐
+- **密度控制**: 新增轨道间隔控制和每拍音符限制
+- **轨道映射**: 频率bin到音高类的智能映射
+
+### 3. 使用方式
+
+#### 命令行使用：
+```bash
+# 生成7K谱面
+python -m automakeosufile.main audio/NIGHTFALL.mp3 --columns 7 --visualize
+
+# 生成4K谱面
+python -m automakeosufile.main audio/NIGHTFALL.mp3 --columns 4
+
+# 自定义输出目录
+python -m automakeosufile.main audio/NIGHTFALL.mp3 --output-dir my_output --columns 6
+```
+
+#### Python API使用：
+```python
+from automakeosufile import AudioProcessor, FeatureExtractor, BeatmapGenerator, Config
+
+# 配置
+config = Config()
+config.DEFAULT_COLUMNS = 7
+
+# 音频处理
+processor = AudioProcessor(config)
+audio_data = processor.process_audio("audio.mp3")
+
+# 特征提取
+extractor = FeatureExtractor(config)
+features = extractor.extract_features(audio_data, audio_data['note_events'])
+
+# 谱面生成
+generator = BeatmapGenerator(config)
+output_path = generator.generate_beatmap("audio.mp3", features)
+```
+
+## 文件说明
+
+### 保留的核心文件
+- `automakeosufile/` - 新模块化包（生产代码）
+- `fileprocess/mp3_to_wav.py` - MP3转WAV工具
+- `fileprocess/osu_file_parse.py` - OSU文件解析
+- `密度修正专项/` - 密度修正实验
+- `test_new_algorithm.py` - 新算法测试
+
+### 归档的旧文件
+- `archive/` - 旧代码归档（参考用）
+  - `algorithm/` - 旧的算法实现
+  - `fileprocess/` - 旧的文件处理
+  - `plotfunction/` - 旧的绘图功能
+
+## 运行环境
+
+```bash
+# 安装依赖
+pip install -r requirements.txt
+
+# 主要依赖
+- librosa >= 0.10.0
+- numpy >= 1.24.0
+- opencv-python >= 4.8.0
+- matplotlib >= 3.7.0
+- scipy >= 1.11.0
+```
+
+## 项目历史
+
+- **v1.0**: 初始版本，代码结构混乱
+- **v2.0**: 重构版本，模块化设计，算法改进
+- **当前状态**: 生产就绪，代码质量显著提升
+
+## 自动复制到osu!歌曲目录
+
+新版本增加了自动将生成的谱面复制到osu!歌曲目录的功能：
+
+### 功能特点
+1. **自动创建文件夹**: 在`D:\osu!\Songs\`目录下创建`{歌曲名}_automake`文件夹
+2. **复制音频文件**: 将原始MP3文件复制到目标文件夹
+3. **复制谱面文件**: 将生成的.osu文件复制到目标文件夹
+4. **错误处理**: 如果osu!目录不存在会给出警告，不会中断程序
+
+### 使用示例
+```bash
+# 生成4K谱面并自动复制到osu!歌曲目录
+python -m automakeosufile.main audio/NIGHTFALL.mp3 --columns 4
+
+# 输出结果示例：
+# ✓ 音频文件复制到: D:\osu!\Songs\NIGHTFALL_automake\NIGHTFALL.mp3
+# ✓ 谱面文件复制到: D:\osu!\Songs\NIGHTFALL_automake\NIGHTFALL_4K.osu
+# ✓ 谱面已复制到osu!歌曲目录: D:\osu!\Songs\NIGHTFALL_automake
+```
+
+### 目录结构
+```
+D:\osu!\Songs\
+├── NIGHTFALL_automake\
+│   ├── NIGHTFALL.mp3          # 音频文件
+│   └── NIGHTFALL_4K.osu       # 生成的谱面文件
+├── 其他歌曲文件夹\
+└── ...
+```
+
+## 未来改进方向
+
+1. **长条检测优化**: 改进音符持续时间检测
+2. **模式识别**: 识别音乐模式（连打、滑条等）
+3. **难度分级**: 根据音符密度自动调整难度
+4. **可视化增强**: 实时处理进度显示
+5. **批量处理**: 支持多个音频文件批量生成
+6. **自定义osu!目录**: 允许用户配置osu!安装目录

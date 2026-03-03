@@ -1,11 +1,3 @@
-"""
-Description: 根据mp3文件在同目录下生成对应wav格式文件
-Author: Cyletix
-Date: 2023-03-17 03:29:08
-LastEditTime: 2023-03-21 02:19:17
-FilePath: r"\AutoMakeosuFile\mp3_to_wav.py"
-"""
-
 import os
 import librosa
 import soundfile
@@ -23,7 +15,7 @@ def mp32wav(mp3_file):
 
 
 if __name__ == "__main__":
-    # filename = 'E:\osu!\Songs\DJ Genki VS Camellia feat moimoi - YELL! [6k]\YELL!.mp3'
+    # filename = r'E:\osu!\Songs\DJ Genki VS Camellia feat moimoi - YELL! [6k]\YELL!.mp3'
 
     # 转换audio文件夹下所有文件
     audio_directory = os.path.join(os.path.dirname(__file__), "..", "audio")
