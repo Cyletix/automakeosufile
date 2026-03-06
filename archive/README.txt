@@ -1,0 +1,1 @@
+这些是旧版本的主程序文件，已由automakeosufile/main.py替代

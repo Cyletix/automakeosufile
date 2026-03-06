@@ -8,20 +8,67 @@ import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 
-# 添加当前目录到路径
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 添加父目录到路径，以便导入automakeosufile模块
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from automakeosufile import AudioProcessor, FeatureExtractor, BeatmapGenerator, Config
+from algorithm import (
+    AudioProcessor,
+    FeatureExtractor,
+    BeatmapGenerator,
+    Config,
+    save_to_picture_with_timestamp,
+)
 
 
 def visualize_results(audio_data, features, output_dir="output"):
     """
-    可视化处理结果
+    可视化处理结果 - 图片保存到picture文件夹，不弹出界面
     """
     print("生成可视化结果...")
 
-    # 创建输出目录
-    os.makedirs(output_dir, exist_ok=True)
+    # 设置中文字体，避免中文乱码
+    import platform
+
+    system = platform.system()
+
+    if system == "Windows":
+        # Windows系统 - 尝试多种中文字体
+        font_candidates = [
+            "Microsoft YaHei",  # 微软雅黑
+            "SimHei",  # 黑体
+            "SimSun",  # 宋体
+            "NSimSun",  # 新宋体
+            "FangSong",  # 仿宋
+            "KaiTi",  # 楷体
+            "DengXian",  # 等线
+            "YouYuan",  # 幼圆
+            "LiSu",  # 隶书
+            "DejaVu Sans",  # 备用字体
+        ]
+
+        # 使用第一个可用的字体
+        plt.rcParams["font.sans-serif"] = font_candidates
+    elif system == "Linux":
+        # Linux系统
+        plt.rcParams["font.sans-serif"] = [
+            "WenQuanYi Micro Hei",
+            "WenQuanYi Zen Hei",
+            "Noto Sans CJK SC",
+            "DejaVu Sans",
+        ]
+    elif system == "Darwin":  # macOS
+        # macOS系统
+        plt.rcParams["font.sans-serif"] = [
+            "PingFang SC",
+            "Hiragino Sans GB",
+            "STHeiti",
+            "STXihei",
+            "Apple LiGothic",
+            "Apple LiSung",
+            "DejaVu Sans",
+        ]
+
+    plt.rcParams["axes.unicode_minus"] = False  # 正确显示负号
 
     fig, axes = plt.subplots(3, 1, figsize=(12, 10))
 
@@ -52,11 +99,13 @@ def visualize_results(audio_data, features, output_dir="output"):
         axes[2].grid(True, alpha=0.3)
 
     plt.tight_layout()
-    output_path = os.path.join(output_dir, "processing_results.png")
-    plt.savefig(output_path, dpi=150)
+
+    # 使用工具函数保存图片到picture文件夹，带时间戳
+    output_path = save_to_picture_with_timestamp(fig, "processing_results.png")
     plt.close()
 
     print(f"可视化结果保存到: {output_path}")
+    print("注意：图片已保存到picture文件夹，不会弹出显示窗口")
 
     # 打印统计信息
     print("\n=== 统计信息 ===")
@@ -86,6 +135,13 @@ def main():
     parser.add_argument("--output-dir", default="output", help="输出目录")
     parser.add_argument("--columns", type=int, default=7, help="键数 (4, 6, 7, 8)")
     parser.add_argument("--visualize", action="store_true", help="生成可视化图表")
+    parser.add_argument("--iteration", type=int, help="迭代编号 (用于参数优化工作流)")
+    parser.add_argument(
+        "--process-seconds",
+        type=float,
+        default=20.0,
+        help="处理音频的前N秒（加快测试速度）",
+    )
 
     args = parser.parse_args()
 
@@ -121,7 +177,7 @@ def main():
         print("\n[阶段3] 谱面生成")
         beatmap_generator = BeatmapGenerator(config)
         output_path = beatmap_generator.generate_beatmap(
-            args.audio_file, features, args.output_dir
+            args.audio_file, features, args.output_dir, args.iteration
         )
 
         # 4. 可视化

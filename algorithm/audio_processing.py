@@ -98,23 +98,40 @@ class AudioProcessor:
 
         return binary_matrix
 
-    def extract_note_events(self, binary_matrix, sr, hop_length):
-        """
-        从二值化矩阵中提取音符事件
-        返回: list of (start_time, end_time, frequency_bin)
-        """
-        print("提取音符事件...")
+    def calculate_energy(self, y, hop_length):
+        """计算音频的RMS能量曲线并归一化"""
+        rmse = librosa.feature.rms(
+            y=y, frame_length=self.config.N_FFT, hop_length=hop_length
+        )[0]
 
+        # 平滑处理
+        window_size = self.config.ENERGY_SMOOTHING_WINDOW
+        if window_size > 1:
+            kernel = np.ones(window_size) / window_size
+            rmse = np.convolve(rmse, kernel, mode="same")
+
+        # 归一化到 0-1
+        rmse_min = rmse.min()
+        rmse_max = rmse.max()
+        if rmse_max > rmse_min:
+            energy_profile = (rmse - rmse_min) / (rmse_max - rmse_min)
+        else:
+            energy_profile = np.zeros_like(rmse)
+
+        return energy_profile
+
+    def extract_note_events(self, binary_matrix, log_mel, sr, hop_length):
+        """
+        提取音符，新增功能：记录每个音符的能量强度(magnitude)
+        注意：参数增加了 log_mel
+        """
+        print("提取音符事件(含强度检测)...")
         note_events = []
         n_freq_bins, n_time_frames = binary_matrix.shape
-
-        # 时间分辨率（秒/帧）
         time_per_frame = hop_length / sr
 
         for freq_bin in range(n_freq_bins):
-            # 获取该频率bin的时间序列
             time_series = binary_matrix[freq_bin, :]
-
             # 找到连续激活的区域
             changes = np.diff(np.concatenate(([0], time_series, [0])))
             starts = np.where(changes == 1)[0]
@@ -124,14 +141,17 @@ class AudioProcessor:
                 duration_frames = end_frame - start_frame
                 duration_ms = duration_frames * time_per_frame * 1000
 
-                # 过滤太短或太长的音符
                 if (
                     duration_ms >= self.config.MIN_NOTE_DURATION_MS
                     and duration_ms <= self.config.MAX_NOTE_DURATION_MS
                 ):
 
-                    start_time = start_frame * time_per_frame * 1000  # ms
-                    end_time = end_frame * time_per_frame * 1000  # ms
+                    start_time = start_frame * time_per_frame * 1000
+                    end_time = end_frame * time_per_frame * 1000
+
+                    # === 新增：获取该音符在 Log-Mel 谱上的平均强度 ===
+                    # 这决定了它是一个主要音符还是背景噪音
+                    magnitude = np.mean(log_mel[freq_bin, start_frame:end_frame])
 
                     note_events.append(
                         {
@@ -139,8 +159,9 @@ class AudioProcessor:
                             "end_time": end_time,
                             "duration": duration_ms,
                             "frequency_bin": freq_bin,
-                            "start_frame": start_frame,
+                            "start_frame": start_frame,  # 保留帧索引用于查询能量
                             "end_frame": end_frame,
+                            "magnitude": magnitude,  # <--- 关键参数
                         }
                     )
 
@@ -176,9 +197,12 @@ class AudioProcessor:
         # 3. 自适应二值化
         binary_matrix = self.adaptive_binarization(mel_normalized)
 
-        # 4. 提取音符事件
+        # 4. 计算能量曲线
+        energy_profile = self.calculate_energy(y, self.config.HOP_LENGTH)
+
+        # 5. 提取音符事件 (传入 log_mel 以获取强度)
         note_events = self.extract_note_events(
-            binary_matrix, sr, self.config.HOP_LENGTH
+            binary_matrix, log_mel, sr, self.config.HOP_LENGTH
         )
 
         return {
@@ -188,5 +212,6 @@ class AudioProcessor:
             "log_mel": log_mel,
             "binary_matrix": binary_matrix,
             "note_events": note_events,
+            "energy_profile": energy_profile,  # <--- 新增返回
             "hop_length": self.config.HOP_LENGTH,
         }

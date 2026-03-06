@@ -5,6 +5,7 @@
 import os
 import datetime
 from .config import Config
+from .utils import copy_to_osu_songs_dir
 
 
 class BeatmapGenerator:
@@ -191,7 +192,7 @@ class BeatmapGenerator:
         for obj in self.hit_objects:
             f.write(obj + "\n")
 
-    def generate_beatmap(self, audio_path, features, output_dir=None):
+    def generate_beatmap(self, audio_path, features, output_dir=None, iteration=None):
         """
         完整的谱面生成流程
         """
@@ -200,11 +201,18 @@ class BeatmapGenerator:
 
         # 设置元数据
         audio_basename = os.path.splitext(os.path.basename(audio_path))[0]
+
+        # 如果有迭代编号，添加到版本名中
+        if iteration is not None:
+            version = f"Auto v2.0 ({self.config.DEFAULT_COLUMNS}K) - Iter{iteration}"
+        else:
+            version = f"Auto v2.0 ({self.config.DEFAULT_COLUMNS}K)"
+
         self.set_metadata(
             title=audio_basename,
             artist=audio_basename,
             creator="AutoMakeosuFile",
-            version=f"Auto v2.0 ({self.config.DEFAULT_COLUMNS}K)",
+            version=version,
             tags="auto-generated",
         )
 
@@ -216,8 +224,14 @@ class BeatmapGenerator:
         # 生成谱面
         self.generate_from_features(features, audio_path)
 
-        # 保存文件
-        output_filename = f"{audio_basename}_{self.config.DEFAULT_COLUMNS}K.osu"
+        # 保存文件 - 如果有迭代编号，添加到文件名中
+        if iteration is not None:
+            output_filename = (
+                f"{audio_basename}_iter{iteration}_{self.config.DEFAULT_COLUMNS}K.osu"
+            )
+        else:
+            output_filename = f"{audio_basename}_{self.config.DEFAULT_COLUMNS}K.osu"
+
         output_path = os.path.join(output_dir, output_filename)
         self.save(output_path)
 
@@ -228,40 +242,8 @@ class BeatmapGenerator:
 
     def _copy_to_osu_songs_dir(self, audio_path, osu_path, audio_basename):
         """
-        将生成的谱面复制到osu!歌曲目录
+        将生成的谱面复制到osu!歌曲目录 - 使用工具函数
         """
-        osu_songs_dir = r"D:\osu!\Songs"
-
-        if not os.path.exists(osu_songs_dir):
-            print(f"警告: osu!歌曲目录不存在: {osu_songs_dir}")
-            return
-
-        # 创建目标文件夹
-        target_folder_name = f"{audio_basename}_automake"
-        target_folder = os.path.join(osu_songs_dir, target_folder_name)
-        os.makedirs(target_folder, exist_ok=True)
-
-        # 复制音频文件
-        audio_filename = os.path.basename(audio_path)
-        target_audio_path = os.path.join(target_folder, audio_filename)
-
-        try:
-            import shutil
-
-            shutil.copy2(audio_path, target_audio_path)
-            print(f"✓ 音频文件复制到: {target_audio_path}")
-        except Exception as e:
-            print(f"✗ 音频文件复制失败: {e}")
-
-        # 复制.osu文件
-        target_osu_path = os.path.join(target_folder, os.path.basename(osu_path))
-
-        try:
-            import shutil
-
-            shutil.copy2(osu_path, target_osu_path)
-            print(f"✓ 谱面文件复制到: {target_osu_path}")
-        except Exception as e:
-            print(f"✗ 谱面文件复制失败: {e}")
-
-        print(f"✓ 谱面已复制到osu!歌曲目录: {target_folder}")
+        target_folder = copy_to_osu_songs_dir(audio_path, osu_path, audio_basename)
+        if target_folder:
+            print(f"✓ 谱面已复制到osu!歌曲目录: {target_folder}")
