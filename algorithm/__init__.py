@@ -1,36 +1,33 @@
-"""
-AutoMakeosuFile - 自动生成osu!mania谱面的Python包
-"""
-
-from .config import Config
 from .audio_processing import AudioProcessor
-from .feature_extraction import FeatureExtractor
 from .beatmap_generator import BeatmapGenerator
-from .auto_optimization import AutoOptimizer
-from .osu_parser import OsuFileParser, parse_osu_file
-from .evolutionary_optimizer import EvolutionaryOptimizer
-from .utils import (
-    add_timestamp_to_filename,
-    save_to_temp_with_timestamp,
-    save_to_picture_with_timestamp,
-    copy_to_osu_songs_dir,
-    cleanup_temp_files,
+from .config import (
+    Config,
+    DEFAULT_EXPORT_SUBDIR,
+    DEFAULT_TEST_AUDIO_FILE,
+    DEFAULT_TEST_REFERENCE_OSU_FILE,
+    DEFAULT_TEST_SONG_DIR,
 )
+from .feature_extraction import FeatureExtractor
+from .osu_parser import OsuFileParser, parse_osu_file
+from .pipeline import run_pipeline
+from .utils import copy_audio_to_output_dir, get_default_song_paths, resolve_output_dir
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __author__ = "AutoMakeosuFile"
+
 __all__ = [
-    "Config",
     "AudioProcessor",
-    "FeatureExtractor",
     "BeatmapGenerator",
-    "AutoOptimizer",
+    "Config",
+    "DEFAULT_EXPORT_SUBDIR",
+    "DEFAULT_TEST_AUDIO_FILE",
+    "DEFAULT_TEST_REFERENCE_OSU_FILE",
+    "DEFAULT_TEST_SONG_DIR",
+    "FeatureExtractor",
     "OsuFileParser",
+    "copy_audio_to_output_dir",
+    "get_default_song_paths",
     "parse_osu_file",
-    "EvolutionaryOptimizer",
-    "add_timestamp_to_filename",
-    "save_to_temp_with_timestamp",
-    "save_to_picture_with_timestamp",
-    "copy_to_osu_songs_dir",
-    "cleanup_temp_files",
+    "resolve_output_dir",
+    "run_pipeline",
 ]

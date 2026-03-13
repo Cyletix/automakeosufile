@@ -1,23 +1,25 @@
 """
-谱面生成模块 - 生成.osu文件
+Beatmap generator for osu!mania .osu files.
 """
 
 import os
-import datetime
+
 from .config import Config
-from .utils import copy_to_osu_songs_dir
+from .utils import copy_audio_to_output_dir, resolve_output_dir
 
 
 class BeatmapGenerator:
     def __init__(self, config=None):
         self.config = config or Config()
+        self.reset()
+
+    def reset(self):
         self.metadata = {}
         self.difficulty = {}
         self.timing_points = []
         self.hit_objects = []
 
     def set_metadata(self, title, artist, creator, version, source="", tags=""):
-        """设置谱面元数据"""
         self.metadata = {
             "Title": title,
             "TitleUnicode": title,
@@ -34,7 +36,6 @@ class BeatmapGenerator:
     def set_difficulty(
         self, hp=5, cs=4, od=5, ar=5, slider_multiplier=1.4, slider_tick_rate=1
     ):
-        """设置难度参数"""
         self.difficulty = {
             "HPDrainRate": hp,
             "CircleSize": cs,
@@ -45,105 +46,68 @@ class BeatmapGenerator:
         }
 
     def generate_from_features(self, features, audio_filename):
-        """
-        从特征数据生成谱面
-        """
         print("生成谱面...")
 
-        # 设置音频文件名
         self.metadata["AudioFilename"] = os.path.basename(audio_filename)
-
-        # 添加TimingPoint
         bpm = features["bpm_info"]["bpm"]
-        self.timing_points.append(
-            [
-                0,  # time
-                60000 / bpm,  # beatLength
-                4,  # meter
-                2,  # sampleSet
-                1,  # sampleIndex
-                60,  # volume
-                1,  # uninherited
-                0,  # effects
-            ]
-        )
+        self.timing_points.append([0, 60000 / bpm, 4, 2, 1, 60, 1, 0])
 
-        # 生成HitObjects
-        controlled_notes = features["controlled_notes"]
-        num_columns = features["config"]["columns"]
-
-        for note in controlled_notes:
-            hit_object = self._create_hit_object(note, num_columns)
-            self.hit_objects.append(hit_object)
+        for note in features["controlled_notes"]:
+            self.hit_objects.append(self._create_hit_object(note))
 
         print(f"生成了 {len(self.hit_objects)} 个HitObjects")
 
-    def _create_hit_object(self, note, num_columns):
-        """
-        创建单个HitObject
-        """
-        x = note.get("x_position", 256)  # 默认中间
-        y = 192  # osu!mania固定y坐标
+    def _create_hit_object(self, note):
+        x = note.get("x_position", 256)
+        y = 192
         time = int(note["aligned_time"])
+        duration = int(note.get("duration", 0))
 
-        # 判断是单点还是长条
-        duration = note.get("duration", 0)
-
-        if duration > 100:  # 持续时间大于100ms视为长条
+        if duration >= self.config.HOLD_NOTE_MIN_DURATION:
             end_time = int(note["end_time"])
-            hit_object = f"{x},{y},{time},128,0,{end_time}:0:0:0:0:"
-        else:
-            hit_object = f"{x},{y},{time},1,0,0:0:0:0:"
+            return f"{x},{y},{time},128,0,{end_time}:0:0:0:0:"
 
-        return hit_object
+        return f"{x},{y},{time},1,0,0:0:0:0:"
 
     def save(self, output_path):
-        """
-        保存谱面到.osu文件
-        """
         print(f"保存谱面到: {output_path}")
-
-        # 确保输出目录存在
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            self._write_general_section(f)
-            self._write_editor_section(f)
-            self._write_metadata_section(f)
-            self._write_difficulty_section(f)
-            self._write_events_section(f)
-            self._write_timing_points_section(f)
-            self._write_hit_objects_section(f)
+        with open(output_path, "w", encoding="utf-8") as handle:
+            self._write_general_section(handle)
+            self._write_editor_section(handle)
+            self._write_metadata_section(handle)
+            self._write_difficulty_section(handle)
+            self._write_events_section(handle)
+            self._write_timing_points_section(handle)
+            self._write_hit_objects_section(handle)
 
         print(f"谱面保存完成: {output_path}")
 
-    def _write_general_section(self, f):
-        """写入General部分"""
-        f.write("osu file format v14\n\n")
-        f.write("[General]\n")
-        f.write(f"AudioFilename: {self.metadata.get('AudioFilename', 'audio.mp3')}\n")
-        f.write("AudioLeadIn: 0\n")
-        f.write("PreviewTime: -1\n")
-        f.write("Countdown: 0\n")
-        f.write("SampleSet: Soft\n")
-        f.write("StackLeniency: 0.7\n")
-        f.write("Mode: 3\n")  # 3表示osu!mania
-        f.write("LetterboxInBreaks: 0\n")
-        f.write("SpecialStyle: 0\n")
-        f.write("WidescreenStoryboard: 0\n\n")
+    def _write_general_section(self, handle):
+        handle.write("osu file format v14\n\n")
+        handle.write("[General]\n")
+        handle.write(f"AudioFilename: {self.metadata.get('AudioFilename', 'audio.mp3')}\n")
+        handle.write("AudioLeadIn: 0\n")
+        handle.write("PreviewTime: -1\n")
+        handle.write("Countdown: 0\n")
+        handle.write("SampleSet: Soft\n")
+        handle.write("StackLeniency: 0.7\n")
+        handle.write("Mode: 3\n")
+        handle.write("LetterboxInBreaks: 0\n")
+        handle.write("SpecialStyle: 0\n")
+        handle.write("WidescreenStoryboard: 0\n\n")
 
-    def _write_editor_section(self, f):
-        """写入Editor部分"""
-        f.write("[Editor]\n")
-        f.write("Bookmarks: \n")
-        f.write("DistanceSpacing: 1.2\n")
-        f.write("BeatDivisor: 4\n")
-        f.write("GridSize: 4\n")
-        f.write("TimelineZoom: 2.3\n\n")
+    def _write_editor_section(self, handle):
+        handle.write("[Editor]\n")
+        handle.write("Bookmarks: \n")
+        handle.write("DistanceSpacing: 1.2\n")
+        handle.write("BeatDivisor: 4\n")
+        handle.write("GridSize: 4\n")
+        handle.write("TimelineZoom: 2.3\n\n")
 
-    def _write_metadata_section(self, f):
-        """写入Metadata部分"""
-        f.write("[Metadata]\n")
+    def _write_metadata_section(self, handle):
+        handle.write("[Metadata]\n")
         for key in [
             "Title",
             "TitleUnicode",
@@ -155,58 +119,70 @@ class BeatmapGenerator:
             "Tags",
         ]:
             if key in self.metadata:
-                f.write(f"{key}:{self.metadata[key]}\n")
-        f.write(f"BeatmapID:{self.metadata.get('BeatmapID', 0)}\n")
-        f.write(f"BeatmapSetID:{self.metadata.get('BeatmapSetID', -1)}\n\n")
+                handle.write(f"{key}:{self.metadata[key]}\n")
+        handle.write(f"BeatmapID:{self.metadata.get('BeatmapID', 0)}\n")
+        handle.write(f"BeatmapSetID:{self.metadata.get('BeatmapSetID', -1)}\n\n")
 
-    def _write_difficulty_section(self, f):
-        """写入Difficulty部分"""
-        f.write("[Difficulty]\n")
+    def _write_difficulty_section(self, handle):
+        handle.write("[Difficulty]\n")
         for key, value in self.difficulty.items():
-            f.write(f"{key}:{value}\n")
-        f.write("\n")
+            handle.write(f"{key}:{value}\n")
+        handle.write("\n")
 
-    def _write_events_section(self, f):
-        """写入Events部分"""
-        f.write("[Events]\n")
-        f.write("//Background and Video events\n")
-        f.write('0,0,"",0,0\n')
-        f.write("//Break Periods\n")
-        f.write("//Storyboard Layer 0 (Background)\n")
-        f.write("//Storyboard Layer 1 (Fail)\n")
-        f.write("//Storyboard Layer 2 (Pass)\n")
-        f.write("//Storyboard Layer 3 (Foreground)\n")
-        f.write("//Storyboard Layer 4 (Overlay)\n")
-        f.write("//Storyboard Sound Samples\n\n")
+    def _write_events_section(self, handle):
+        handle.write("[Events]\n")
+        handle.write("//Background and Video events\n")
+        handle.write('0,0,"",0,0\n')
+        handle.write("//Break Periods\n")
+        handle.write("//Storyboard Layer 0 (Background)\n")
+        handle.write("//Storyboard Layer 1 (Fail)\n")
+        handle.write("//Storyboard Layer 2 (Pass)\n")
+        handle.write("//Storyboard Layer 3 (Foreground)\n")
+        handle.write("//Storyboard Layer 4 (Overlay)\n")
+        handle.write("//Storyboard Sound Samples\n\n")
 
-    def _write_timing_points_section(self, f):
-        """写入TimingPoints部分"""
-        f.write("[TimingPoints]\n")
+    def _write_timing_points_section(self, handle):
+        handle.write("[TimingPoints]\n")
         for point in self.timing_points:
-            f.write(",".join(str(p) for p in point) + "\n")
-        f.write("\n")
+            handle.write(",".join(str(value) for value in point) + "\n")
+        handle.write("\n")
 
-    def _write_hit_objects_section(self, f):
-        """写入HitObjects部分"""
-        f.write("[HitObjects]\n")
-        for obj in self.hit_objects:
-            f.write(obj + "\n")
+    def _write_hit_objects_section(self, handle):
+        handle.write("[HitObjects]\n")
+        for hit_object in self.hit_objects:
+            handle.write(hit_object + "\n")
 
-    def generate_beatmap(self, audio_path, features, output_dir=None, iteration=None):
-        """
-        完整的谱面生成流程
-        """
-        if output_dir is None:
-            output_dir = self.config.OUTPUT_DIR
+    def generate_beatmap(
+        self,
+        audio_path,
+        features,
+        output_dir=None,
+        iteration=None,
+        output_filename=None,
+        copy_audio=None,
+        version_label=None,
+    ):
+        self.reset()
+        copy_audio = (
+            self.config.COPY_AUDIO_TO_OUTPUT_DIR if copy_audio is None else copy_audio
+        )
+        output_dir = resolve_output_dir(
+            audio_path,
+            output_dir=output_dir or self.config.OUTPUT_DIR,
+            export_subdir=self.config.EXPORT_SUBDIR,
+        )
 
-        # 设置元数据
         audio_basename = os.path.splitext(os.path.basename(audio_path))[0]
+        beatmap_audio_path = audio_path
+        if copy_audio:
+            beatmap_audio_path = copy_audio_to_output_dir(audio_path, output_dir)
 
-        # 如果有迭代编号，添加到版本名中
-        if iteration is not None:
-            version = f"Auto v2.0 ({self.config.DEFAULT_COLUMNS}K) - Iter{iteration}"
+        if version_label:
+            version = version_label
+        elif iteration is not None:
+            version = f"Auto v2.1 ({self.config.DEFAULT_COLUMNS}K) - Iter{iteration}"
         else:
-            version = f"Auto v2.0 ({self.config.DEFAULT_COLUMNS}K)"
+            version = f"Auto v2.1 ({self.config.DEFAULT_COLUMNS}K)"
 
         self.set_metadata(
             title=audio_basename,
@@ -215,35 +191,18 @@ class BeatmapGenerator:
             version=version,
             tags="auto-generated",
         )
+        self.set_difficulty(hp=5, cs=self.config.DEFAULT_COLUMNS, od=5, ar=5)
+        self.generate_from_features(features, beatmap_audio_path)
 
-        # 设置难度
-        self.set_difficulty(
-            hp=5, cs=self.config.DEFAULT_COLUMNS, od=5, ar=5  # CircleSize等于键数
-        )
-
-        # 生成谱面
-        self.generate_from_features(features, audio_path)
-
-        # 保存文件 - 如果有迭代编号，添加到文件名中
-        if iteration is not None:
-            output_filename = (
-                f"{audio_basename}_iter{iteration}_{self.config.DEFAULT_COLUMNS}K.osu"
-            )
-        else:
-            output_filename = f"{audio_basename}_{self.config.DEFAULT_COLUMNS}K.osu"
+        if output_filename is None:
+            if iteration is not None:
+                output_filename = (
+                    f"{audio_basename}_iter{iteration}_{self.config.DEFAULT_COLUMNS}K.osu"
+                )
+            else:
+                output_filename = f"{audio_basename}_{self.config.DEFAULT_COLUMNS}K.osu"
 
         output_path = os.path.join(output_dir, output_filename)
         self.save(output_path)
 
-        # 复制到osu!歌曲目录
-        self._copy_to_osu_songs_dir(audio_path, output_path, audio_basename)
-
         return output_path
-
-    def _copy_to_osu_songs_dir(self, audio_path, osu_path, audio_basename):
-        """
-        将生成的谱面复制到osu!歌曲目录 - 使用工具函数
-        """
-        target_folder = copy_to_osu_songs_dir(audio_path, osu_path, audio_basename)
-        if target_folder:
-            print(f"✓ 谱面已复制到osu!歌曲目录: {target_folder}")

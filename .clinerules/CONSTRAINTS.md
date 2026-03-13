@@ -1,23 +1,14 @@
-# 🔥 CRITICAL FILE SYSTEM CONSTRAINTS (MUST FOLLOW) 🔥
+# Repository Constraints
 
-## 🚫 FORBIDDEN ACTIONS (禁止事项)
-1. **NO NEW ROOT DIRECTORIES**: You are STRICTLY PROHIBITED from creating new folders in the project root (e.g., `output_optimized`, `output_iter1`, `test_results`).
-2. **NO ROOT SCRIPTS**: Do not create temporary python scripts (`test.py`, `debug.py`) in the root.
-3. **NO VISUAL POPUPS**: Do not use `plt.show()` or `cv2.imshow()`.
-
-## ✅ MANDATORY PATH RULES (强制路径规则)
-1. **TEMP SCRIPTS**: All temporary analysis/test scripts MUST be created in `temp/`.
-   - *Fixing Imports*: When running scripts from `temp/`, you MUST append the project root to `sys.path` to import `automakeosufile`.
-   - Example snippet for EVERY temp script:
-     ```python
-     import sys, os
-     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-     from automakeosufile import ...
-     ```
-2. **OUTPUT LOCATION**: 
-   - Standard output -> `output/`
-   - Optimization iterations -> `output/optimization_experiments/` (Create this subfolder if needed)
-   - NEVER create folders like `output_optimized_v2` in root.
-
-## 🧹 CLEANUP PROTOCOL
-- If you create a file by mistake in the root, DELETE IT immediately.
+1. Before any task, read the root `README.md`.
+2. Production code lives in `algorithm/`. Do not create a parallel core module.
+3. `archive/` is reference-only. Do not revive old workflows there.
+4. `temp/` may hold disposable scratch work only. Do not place core optimizer logic, parsers, or permanent tests in `temp/`.
+5. Do not create new folders in the project root.
+6. Default outputs must stay under `output/optimization_experiments/` unless the user explicitly asks for another existing path.
+7. Optimization should overwrite stable workspace files such as:
+   - `current_candidate.osu`
+   - `best_candidate.osu`
+   - `optimization_report.json`
+8. Avoid popup windows. Save plots to `picture/`.
+9. If copying files into the osu! songs directory fails, treat it as a warning, not a fatal error.

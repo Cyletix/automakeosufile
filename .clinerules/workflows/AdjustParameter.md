@@ -1,12 +1,14 @@
-创建优化算法以进行参数迭代(已完成创建则使用已有的)
+# Parameter Adjustment Workflow
 
-1. 分析算法, 明确影响较大的几个可调参数
-2. 根据算法, 生成一份指定的谱面.osu文件
-3. 与优秀的.osu文件范例进行对比,分析差异
-4. 调整算法参数, 使得两个osu文件的差异减小
-5. 重复2-4步骤, 直到差异小到一定范围, 比如0.1
+1. Read the root `README.md`.
+2. Use `audio/Scattered Rose.wav` and `audio/Scattered Rose.osu` as the default benchmark pair unless the user says otherwise.
+3. Run the unified optimizer:
 
-重要路径约束：
-所有的迭代产物必须覆盖写入到 temp/current_optimization/ 文件夹中，使用带时间戳的命名并放入 output/experiments/。
-严禁在根目录创建 output_optimized 或类似文件夹。
-分析脚本必须放在 temp/ 目录下，并正确处理 sys.path 引用。
+```bash
+python -m algorithm.optimizer --audio-file "audio/Scattered Rose.wav" --reference-osu "audio/Scattered Rose.osu" --rounds 2
+```
+
+4. Judge changes by reference statistics, not by file creation alone.
+5. Keep optimization artifacts inside `output/optimization_experiments/`.
+6. Do not create extra optimizer scripts in `temp/`.
+7. After meaningful tuning, update the benchmark section in `README.md` and `docs/parameter_optimization_summary.md`.

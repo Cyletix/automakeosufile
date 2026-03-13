@@ -1,11 +1,17 @@
 """
-音频处理模块 - 加载音频、计算Mel频谱、自适应二值化
+Audio processing: load audio, compute Mel spectrogram, binarize, and extract
+note events without relying on librosa-heavy runtime paths.
 """
 
 import os
-import numpy as np
-import librosa
+import shutil
+import tempfile
+
 import cv2
+import numpy as np
+import soundfile as sf
+from scipy import signal
+
 from .config import Config
 
 
@@ -14,70 +20,109 @@ class AudioProcessor:
         self.config = config or Config()
 
     def load_audio(self, audio_path):
-        """
-        加载音频文件，支持mp3和wav格式
-        """
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"音频文件不存在: {audio_path}")
+        temp_dir = None
 
-        # 如果是mp3文件，先转换为wav
-        if audio_path.lower().endswith(".mp3"):
-            wav_path = os.path.splitext(audio_path)[0] + ".wav"
-            if not os.path.exists(wav_path):
-                print(f"转换MP3到WAV: {audio_path}")
-                self._convert_mp3_to_wav(audio_path, wav_path)
-            audio_path = wav_path
+        try:
+            print(f"加载音频: {audio_path}")
+            y, sr = sf.read(audio_path, dtype="float32", always_2d=False)
+        except RuntimeError:
+            if not audio_path.lower().endswith(".mp3"):
+                raise
 
-        # 加载音频
-        print(f"加载音频: {audio_path}")
-        y, sr = librosa.load(
-            audio_path,
-            sr=self.config.SAMPLE_RATE,
-            mono=self.config.MONO,
-            duration=self.config.DURATION,
-        )
+            temp_dir = tempfile.mkdtemp(prefix="automakeosu_audio_")
+            wav_path = os.path.join(
+                temp_dir,
+                os.path.splitext(os.path.basename(audio_path))[0] + ".wav",
+            )
+            print(f"转换MP3到临时WAV: {audio_path}")
+            self._convert_audio(audio_path, wav_path)
+            print(f"加载音频: {wav_path}")
+            y, sr = sf.read(wav_path, dtype="float32", always_2d=False)
+        finally:
+            if temp_dir is not None:
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
-        return y, sr
+        if getattr(y, "ndim", 1) > 1 and self.config.MONO:
+            y = np.mean(y, axis=1)
 
-    def _convert_mp3_to_wav(self, mp3_path, wav_path):
-        """转换MP3到WAV格式"""
-        import soundfile as sf
+        if self.config.DURATION is not None:
+            y = y[: int(sr * self.config.DURATION)]
 
-        y, sr = librosa.load(mp3_path, sr=self.config.SAMPLE_RATE)
-        sf.write(wav_path, y, sr)
+        if sr != self.config.SAMPLE_RATE:
+            y = signal.resample_poly(y, self.config.SAMPLE_RATE, sr)
+            sr = self.config.SAMPLE_RATE
+
+        return y.astype(np.float32), sr
+
+    def _convert_audio(self, source_path, wav_path):
+        audio, sample_rate = sf.read(source_path, dtype="float32", always_2d=False)
+        if getattr(audio, "ndim", 1) > 1:
+            audio = np.mean(audio, axis=1)
+        sf.write(wav_path, audio, sample_rate)
 
     def compute_mel_spectrogram(self, y, sr):
-        """
-        计算Mel频谱图
-        """
         print("计算Mel频谱图...")
 
-        # 计算Mel频谱
-        mel_spec = librosa.feature.melspectrogram(
-            y=y,
-            sr=sr,
-            n_fft=self.config.N_FFT,
-            hop_length=self.config.HOP_LENGTH,
-            n_mels=self.config.N_MELS,
-            fmin=self.config.FMIN,
-            fmax=self.config.FMAX,
+        _, _, stft_matrix = signal.stft(
+            y,
+            fs=sr,
+            nperseg=self.config.N_FFT,
+            noverlap=self.config.N_FFT - self.config.HOP_LENGTH,
+            padded=False,
+            boundary=None,
         )
+        power_spectrogram = np.abs(stft_matrix) ** 2
 
-        # 转换为分贝尺度
-        log_mel = librosa.power_to_db(mel_spec, ref=np.max)
+        mel_filter = self._build_mel_filter(sr)
+        mel_spec = np.dot(mel_filter, power_spectrogram)
+        mel_spec = np.maximum(mel_spec, 1e-10)
 
-        # 归一化到0-255
+        log_mel = 10.0 * np.log10(mel_spec)
+        log_mel -= np.max(log_mel)
         mel_normalized = self._normalize_to_uint8(log_mel)
 
         return mel_spec, log_mel, mel_normalized
 
-    def adaptive_binarization(self, mel_normalized):
-        """
-        自适应二值化Mel频谱
-        """
-        print("自适应二值化...")
+    def _build_mel_filter(self, sr):
+        n_fft = self.config.N_FFT
+        n_mels = self.config.N_MELS
+        fmin = self.config.FMIN
+        fmax = min(self.config.FMAX, sr / 2)
 
-        # 应用自适应阈值
+        mel_min = self._hz_to_mel(fmin)
+        mel_max = self._hz_to_mel(fmax)
+        mel_points = np.linspace(mel_min, mel_max, n_mels + 2)
+        hz_points = self._mel_to_hz(mel_points)
+        bins = np.floor((n_fft + 1) * hz_points / sr).astype(int)
+        bins = np.clip(bins, 0, n_fft // 2)
+
+        filter_bank = np.zeros((n_mels, n_fft // 2 + 1), dtype=np.float32)
+
+        for index in range(1, n_mels + 1):
+            left = bins[index - 1]
+            center = bins[index]
+            right = bins[index + 1]
+
+            if center == left:
+                center += 1
+            if right == center:
+                right += 1
+
+            for frequency_bin in range(left, center):
+                filter_bank[index - 1, frequency_bin] = (frequency_bin - left) / (
+                    center - left
+                )
+            for frequency_bin in range(center, right):
+                filter_bank[index - 1, frequency_bin] = (right - frequency_bin) / (
+                    right - center
+                )
+
+        return filter_bank
+
+    def adaptive_binarization(self, mel_normalized):
+        print("自适应二值化...")
         binary = cv2.adaptiveThreshold(
             mel_normalized,
             255,
@@ -87,52 +132,44 @@ class AudioProcessor:
             self.config.ADAPTIVE_THRESHOLD_C,
         )
 
-        # 形态学操作去除噪声
         kernel = np.ones(
             (self.config.MORPH_KERNEL_SIZE, self.config.MORPH_KERNEL_SIZE), np.uint8
         )
         binary_cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-
-        # 转换为0/1矩阵
-        binary_matrix = (binary_cleaned > 0).astype(np.float32)
-
-        return binary_matrix
+        return (binary_cleaned > 0).astype(np.float32)
 
     def calculate_energy(self, y, hop_length):
-        """计算音频的RMS能量曲线并归一化"""
-        rmse = librosa.feature.rms(
-            y=y, frame_length=self.config.N_FFT, hop_length=hop_length
-        )[0]
+        frame_length = self.config.N_FFT
+        if len(y) < frame_length:
+            return np.array([0.0], dtype=np.float32)
 
-        # 平滑处理
+        frame_count = 1 + (len(y) - frame_length) // hop_length
+        rms_values = np.empty(frame_count, dtype=np.float32)
+
+        for index in range(frame_count):
+            start = index * hop_length
+            frame = y[start : start + frame_length]
+            rms_values[index] = np.sqrt(np.mean(np.square(frame)))
+
         window_size = self.config.ENERGY_SMOOTHING_WINDOW
         if window_size > 1:
             kernel = np.ones(window_size) / window_size
-            rmse = np.convolve(rmse, kernel, mode="same")
+            rms_values = np.convolve(rms_values, kernel, mode="same")
 
-        # 归一化到 0-1
-        rmse_min = rmse.min()
-        rmse_max = rmse.max()
-        if rmse_max > rmse_min:
-            energy_profile = (rmse - rmse_min) / (rmse_max - rmse_min)
-        else:
-            energy_profile = np.zeros_like(rmse)
-
-        return energy_profile
+        rms_min = float(np.min(rms_values))
+        rms_max = float(np.max(rms_values))
+        if rms_max > rms_min:
+            return (rms_values - rms_min) / (rms_max - rms_min)
+        return np.zeros_like(rms_values)
 
     def extract_note_events(self, binary_matrix, log_mel, sr, hop_length):
-        """
-        提取音符，新增功能：记录每个音符的能量强度(magnitude)
-        注意：参数增加了 log_mel
-        """
         print("提取音符事件(含强度检测)...")
         note_events = []
-        n_freq_bins, n_time_frames = binary_matrix.shape
+        n_freq_bins, _ = binary_matrix.shape
         time_per_frame = hop_length / sr
 
         for freq_bin in range(n_freq_bins):
             time_series = binary_matrix[freq_bin, :]
-            # 找到连续激活的区域
             changes = np.diff(np.concatenate(([0], time_series, [0])))
             starts = np.where(changes == 1)[0]
             ends = np.where(changes == -1)[0]
@@ -141,66 +178,55 @@ class AudioProcessor:
                 duration_frames = end_frame - start_frame
                 duration_ms = duration_frames * time_per_frame * 1000
 
-                if (
-                    duration_ms >= self.config.MIN_NOTE_DURATION_MS
-                    and duration_ms <= self.config.MAX_NOTE_DURATION_MS
+                if not (
+                    self.config.MIN_NOTE_DURATION_MS
+                    <= duration_ms
+                    <= self.config.MAX_NOTE_DURATION_MS
                 ):
+                    continue
 
-                    start_time = start_frame * time_per_frame * 1000
-                    end_time = end_frame * time_per_frame * 1000
+                start_time = start_frame * time_per_frame * 1000
+                end_time = end_frame * time_per_frame * 1000
+                magnitude = float(np.mean(log_mel[freq_bin, start_frame:end_frame]))
 
-                    # === 新增：获取该音符在 Log-Mel 谱上的平均强度 ===
-                    # 这决定了它是一个主要音符还是背景噪音
-                    magnitude = np.mean(log_mel[freq_bin, start_frame:end_frame])
+                note_events.append(
+                    {
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "duration": duration_ms,
+                        "frequency_bin": freq_bin,
+                        "start_frame": start_frame,
+                        "end_frame": end_frame,
+                        "magnitude": magnitude,
+                    }
+                )
 
-                    note_events.append(
-                        {
-                            "start_time": start_time,
-                            "end_time": end_time,
-                            "duration": duration_ms,
-                            "frequency_bin": freq_bin,
-                            "start_frame": start_frame,  # 保留帧索引用于查询能量
-                            "end_frame": end_frame,
-                            "magnitude": magnitude,  # <--- 关键参数
-                        }
-                    )
-
-        # 按开始时间排序
-        note_events.sort(key=lambda x: x["start_time"])
-
+        note_events.sort(key=lambda item: item["start_time"])
         print(f"提取到 {len(note_events)} 个音符事件")
         return note_events
 
     def _normalize_to_uint8(self, data):
-        """归一化数据到0-255范围"""
-        data_min = data.min()
-        data_max = data.max()
-
+        data_min = float(np.min(data))
+        data_max = float(np.max(data))
         if data_max > data_min:
             normalized = 255 * (data - data_min) / (data_max - data_min)
         else:
             normalized = np.zeros_like(data)
-
         return normalized.astype(np.uint8)
 
+    @staticmethod
+    def _hz_to_mel(hz):
+        return 2595.0 * np.log10(1.0 + hz / 700.0)
+
+    @staticmethod
+    def _mel_to_hz(mel):
+        return 700.0 * (10 ** (mel / 2595.0) - 1.0)
+
     def process_audio(self, audio_path):
-        """
-        完整的音频处理流程
-        返回: (y, sr, mel_spec, log_mel, binary_matrix, note_events)
-        """
-        # 1. 加载音频
         y, sr = self.load_audio(audio_path)
-
-        # 2. 计算Mel频谱
         mel_spec, log_mel, mel_normalized = self.compute_mel_spectrogram(y, sr)
-
-        # 3. 自适应二值化
         binary_matrix = self.adaptive_binarization(mel_normalized)
-
-        # 4. 计算能量曲线
         energy_profile = self.calculate_energy(y, self.config.HOP_LENGTH)
-
-        # 5. 提取音符事件 (传入 log_mel 以获取强度)
         note_events = self.extract_note_events(
             binary_matrix, log_mel, sr, self.config.HOP_LENGTH
         )
@@ -212,6 +238,6 @@ class AudioProcessor:
             "log_mel": log_mel,
             "binary_matrix": binary_matrix,
             "note_events": note_events,
-            "energy_profile": energy_profile,  # <--- 新增返回
+            "energy_profile": energy_profile,
             "hop_length": self.config.HOP_LENGTH,
         }

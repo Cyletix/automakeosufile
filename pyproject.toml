@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "automakeosu-core"
+version = "2.1.0"
+description = "Reusable core beatmap generation algorithms for osu!mania."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "opencv-python",
+  "scipy",
+  "soundfile",
+]
+
+[tool.setuptools]
+packages = ["algorithm", "automakeosu"]

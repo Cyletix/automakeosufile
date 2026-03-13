@@ -1,17 +1,14 @@
-#!/usr/bin/env python3
-"""
-.osu文件解析器 - 用于提取谱面统计信息
-"""
-
 import os
 import re
-import json
 from typing import Dict, List, Tuple
 import numpy as np
 
 
 class OsuFileParser:
     def __init__(self):
+        self._reset()
+
+    def _reset(self):
         self.hit_objects = []
         self.timing_points = []
         self.metadata = {}
@@ -28,6 +25,7 @@ class OsuFileParser:
             raise FileNotFoundError(f"文件不存在: {filepath}")
 
         print(f"解析文件: {filepath}")
+        self._reset()
 
         with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
@@ -150,18 +148,19 @@ class OsuFileParser:
                 hold_durations.append(duration)
         mean_hold_duration = np.mean(hold_durations) if hold_durations else 0
 
+        columns = int(self.difficulty.get("CircleSize", 7) or 7)
+
         # 轨道分布 (osu!mania中x坐标对应轨道)
         column_distribution = {}
         column_balance = {}
 
         for obj in sorted_objects:
-            # osu!mania中x坐标范围是0-512，7K时每个轨道宽度约73
             x = obj["x"]
-            column = self._x_to_column(x, 7)  # 假设7K
+            column = self._x_to_column(x, columns)
             column_distribution[column] = column_distribution.get(column, 0) + 1
 
         # 计算轨道平衡百分比
-        for col in range(7):
+        for col in range(columns):
             count = column_distribution.get(col, 0)
             column_balance[col] = (count / total_notes * 100) if total_notes > 0 else 0
 
@@ -196,6 +195,7 @@ class OsuFileParser:
             "column_distribution": column_distribution,
             "column_balance": column_balance,
             "column_balance_std": column_balance_std,
+            "columns": columns,
             "interval_stats": interval_stats,
             "intervals": intervals,
         }
@@ -212,13 +212,3 @@ def parse_osu_file(filepath: str) -> Dict:
     """解析.osu文件的便捷函数"""
     parser = OsuFileParser()
     return parser.parse_file(filepath)
-
-
-if __name__ == "__main__":
-    # 测试解析
-    test_file = "output/optimization_experiments/Scattered Rose_iter1_7K.osu"
-    if os.path.exists(test_file):
-        stats = parse_osu_file(test_file)
-        print(json.dumps(stats, indent=2))
-    else:
-        print(f"测试文件不存在: {test_file}")
