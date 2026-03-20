@@ -50,7 +50,14 @@ class BeatmapGenerator:
 
         self.metadata["AudioFilename"] = os.path.basename(audio_filename)
         bpm = features["bpm_info"]["bpm"]
-        self.timing_points.append([0, 60000 / bpm, 4, 2, 1, 60, 1, 0])
+        beat_length_ms = 60000 / bpm
+        first_beat_time = float(features.get("bpm_info", {}).get("first_beat_time", 0.0))
+        timing_offset_ms = first_beat_time * 1000.0
+        while timing_offset_ms >= beat_length_ms and beat_length_ms > 0:
+            timing_offset_ms -= beat_length_ms
+        while timing_offset_ms < 0.0 and beat_length_ms > 0:
+            timing_offset_ms += beat_length_ms
+        self.timing_points.append([round(timing_offset_ms, 3), beat_length_ms, 4, 2, 1, 60, 1, 0])
 
         for note in features["controlled_notes"]:
             self.hit_objects.append(self._create_hit_object(note))

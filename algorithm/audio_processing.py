@@ -162,6 +162,71 @@ class AudioProcessor:
             return (rms_values - rms_min) / (rms_max - rms_min)
         return np.zeros_like(rms_values)
 
+    def _normalize_profile(self, values):
+        profile = np.asarray(values, dtype=np.float32)
+        if profile.size == 0:
+            return np.zeros(1, dtype=np.float32)
+        profile = np.maximum(profile, 0.0)
+        profile_min = float(np.min(profile))
+        profile_max = float(np.max(profile))
+        if profile_max > profile_min:
+            profile = (profile - profile_min) / (profile_max - profile_min)
+        else:
+            profile = np.zeros_like(profile)
+        return profile.astype(np.float32)
+
+    def _positive_diff_profile(self, values):
+        profile = np.asarray(values, dtype=np.float32)
+        if profile.size == 0:
+            return np.zeros(1, dtype=np.float32)
+        diff_profile = np.maximum(0.0, np.diff(profile, prepend=profile[0]))
+        window_size = max(1, int(self.config.ONSET_SMOOTHING_WINDOW))
+        if window_size > 1:
+            kernel = np.ones(window_size, dtype=np.float32) / float(window_size)
+            diff_profile = np.convolve(diff_profile, kernel, mode="same")
+        return self._normalize_profile(diff_profile)
+
+    def calculate_onset_profiles(self, mel_spectrogram):
+        mel = np.asarray(mel_spectrogram, dtype=np.float32)
+        if mel.ndim != 2 or mel.shape[1] == 0:
+            zero_profile = np.zeros(1, dtype=np.float32)
+            return {
+                "low": zero_profile,
+                "mid": zero_profile,
+                "high": zero_profile,
+                "combined": zero_profile,
+            }
+
+        band_count = mel.shape[0]
+
+        def band_slice(ratio_range):
+            start_ratio, end_ratio = ratio_range
+            start_index = max(0, min(band_count - 1, int(round(band_count * start_ratio))))
+            end_index = max(start_index + 1, min(band_count, int(round(band_count * end_ratio))))
+            return mel[start_index:end_index, :]
+
+        low_band = band_slice(self.config.ONSET_LOW_BAND_RATIO)
+        mid_band = band_slice(self.config.ONSET_MID_BAND_RATIO)
+        high_band = band_slice(self.config.ONSET_HIGH_BAND_RATIO)
+
+        low_profile = self._positive_diff_profile(np.mean(low_band, axis=0))
+        mid_profile = self._positive_diff_profile(np.mean(mid_band, axis=0))
+        high_profile = self._positive_diff_profile(np.mean(high_band, axis=0))
+
+        low_weight, mid_weight, high_weight = self.config.ONSET_COMBINED_WEIGHTS
+        combined_profile = self._normalize_profile(
+            low_profile * float(low_weight)
+            + mid_profile * float(mid_weight)
+            + high_profile * float(high_weight)
+        )
+
+        return {
+            "low": low_profile,
+            "mid": mid_profile,
+            "high": high_profile,
+            "combined": combined_profile,
+        }
+
     def extract_note_events(self, binary_matrix, log_mel, sr, hop_length):
         print("提取音符事件(含强度检测)...")
         note_events = []
@@ -227,6 +292,7 @@ class AudioProcessor:
         mel_spec, log_mel, mel_normalized = self.compute_mel_spectrogram(y, sr)
         binary_matrix = self.adaptive_binarization(mel_normalized)
         energy_profile = self.calculate_energy(y, self.config.HOP_LENGTH)
+        onset_profiles = self.calculate_onset_profiles(mel_spec)
         note_events = self.extract_note_events(
             binary_matrix, log_mel, sr, self.config.HOP_LENGTH
         )
@@ -239,5 +305,6 @@ class AudioProcessor:
             "binary_matrix": binary_matrix,
             "note_events": note_events,
             "energy_profile": energy_profile,
+            "onset_profiles": onset_profiles,
             "hop_length": self.config.HOP_LENGTH,
         }
