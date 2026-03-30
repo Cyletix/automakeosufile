@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Beatmap generator for osu!mania .osu files.
 """
@@ -51,13 +52,17 @@ class BeatmapGenerator:
         self.metadata["AudioFilename"] = os.path.basename(audio_filename)
         bpm = features["bpm_info"]["bpm"]
         beat_length_ms = 60000 / bpm
-        first_beat_time = float(features.get("bpm_info", {}).get("first_beat_time", 0.0))
+        first_beat_time = float(
+            features.get("bpm_info", {}).get("first_beat_time", 0.0)
+        )
         timing_offset_ms = first_beat_time * 1000.0
         while timing_offset_ms >= beat_length_ms and beat_length_ms > 0:
             timing_offset_ms -= beat_length_ms
         while timing_offset_ms < 0.0 and beat_length_ms > 0:
             timing_offset_ms += beat_length_ms
-        self.timing_points.append([round(timing_offset_ms, 3), beat_length_ms, 4, 2, 1, 60, 1, 0])
+        self.timing_points.append(
+            [round(timing_offset_ms, 3), beat_length_ms, 4, 2, 1, 60, 1, 0]
+        )
 
         for note in features["controlled_notes"]:
             self.hit_objects.append(self._create_hit_object(note))
@@ -94,7 +99,9 @@ class BeatmapGenerator:
     def _write_general_section(self, handle):
         handle.write("osu file format v14\n\n")
         handle.write("[General]\n")
-        handle.write(f"AudioFilename: {self.metadata.get('AudioFilename', 'audio.mp3')}\n")
+        handle.write(
+            f"AudioFilename: {self.metadata.get('AudioFilename', 'audio.mp3')}\n"
+        )
         handle.write("AudioLeadIn: 0\n")
         handle.write("PreviewTime: -1\n")
         handle.write("Countdown: 0\n")
@@ -203,9 +210,7 @@ class BeatmapGenerator:
 
         if output_filename is None:
             if iteration is not None:
-                output_filename = (
-                    f"{audio_basename}_iter{iteration}_{self.config.DEFAULT_COLUMNS}K.osu"
-                )
+                output_filename = f"{audio_basename}_iter{iteration}_{self.config.DEFAULT_COLUMNS}K.osu"
             else:
                 output_filename = f"{audio_basename}_{self.config.DEFAULT_COLUMNS}K.osu"
 

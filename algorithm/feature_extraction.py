@@ -84,7 +84,9 @@ class FeatureExtractor:
         print(f"检测到BPM: {bpm:.1f}, 第一个节拍: {first_beat_time:.2f}s")
         return {"bpm": bpm, "first_beat_time": first_beat_time, "beats": beats}
 
-    def build_dynamic_beat_path(self, onset_profile, hop_length, sr, bpm, first_beat_time=0):
+    def build_dynamic_beat_path(
+        self, onset_profile, hop_length, sr, bpm, first_beat_time=0
+    ):
         onset = self._normalize_profile(onset_profile)
         if onset.size == 0 or bpm <= 0:
             return {
@@ -93,7 +95,9 @@ class FeatureExtractor:
                 "confidence": 0.0,
             }
 
-        beat_step_frames = max(1, int(round((60.0 / float(bpm)) * float(sr) / float(hop_length))))
+        beat_step_frames = max(
+            1, int(round((60.0 / float(bpm)) * float(sr) / float(hop_length)))
+        )
         phase_stride = max(1, beat_step_frames // 24)
         best_phase = 0
         best_score = -1.0
@@ -117,7 +121,9 @@ class FeatureExtractor:
                 continue
             local_peak_offset = int(np.argmax(local_window))
             refined_frame = start_idx + local_peak_offset
-            beat_times_ms.append(float(refined_frame) * float(hop_length) / float(sr) * 1000.0)
+            beat_times_ms.append(
+                float(refined_frame) * float(hop_length) / float(sr) * 1000.0
+            )
 
         phase_offset_ms = float(best_phase) * float(hop_length) / float(sr) * 1000.0
         confidence = 0.0
@@ -174,18 +180,34 @@ class FeatureExtractor:
         low_profile = self._normalize_profile(onset_profiles.get("low", base_profile))
         mid_profile = self._normalize_profile(onset_profiles.get("mid", base_profile))
         high_profile = self._normalize_profile(onset_profiles.get("high", base_profile))
-        combined_profile = self._normalize_profile(onset_profiles.get("combined", base_profile))
+        combined_profile = self._normalize_profile(
+            onset_profiles.get("combined", base_profile)
+        )
 
         if divisor <= 2:
             profile = low_profile * 0.45 + mid_profile * 0.35 + combined_profile * 0.20
         elif divisor <= 4:
             profile = mid_profile * 0.42 + high_profile * 0.28 + combined_profile * 0.30
-        else:
+        elif divisor <= 8:
             profile = high_profile * 0.50 + mid_profile * 0.20 + combined_profile * 0.30
+        else:
+            # divisor >= 12/16: 16分音更依赖高频瞬态和 pitch onset
+            pitch_profile = self._normalize_profile(
+                onset_profiles.get("pitch", combined_profile)
+            )
+            profile = (
+                high_profile * 0.40 + pitch_profile * 0.30 + combined_profile * 0.30
+            )
         return self._normalize_profile(profile)
 
     def build_transient_layer_metrics(
-        self, energy_profile, hop_length, sr, bpm, first_beat_time=0, onset_profiles=None
+        self,
+        energy_profile,
+        hop_length,
+        sr,
+        bpm,
+        first_beat_time=0,
+        onset_profiles=None,
     ):
         metrics = {}
         weights = {}
@@ -204,20 +226,32 @@ class FeatureExtractor:
             step_ms = beat_duration_ms / float(divisor)
             if step_ms <= 0:
                 continue
-            divisor_profile = self._build_divisor_profile(onset_profiles, energy_profile, divisor)
-            base_diff = np.maximum(0.0, np.diff(divisor_profile, prepend=divisor_profile[0]))
+            divisor_profile = self._build_divisor_profile(
+                onset_profiles, energy_profile, divisor
+            )
+            base_diff = np.maximum(
+                0.0, np.diff(divisor_profile, prepend=divisor_profile[0])
+            )
 
-            positions_ms = np.arange(first_beat_ms, total_duration_ms + step_ms, step_ms)
+            positions_ms = np.arange(
+                first_beat_ms, total_duration_ms + step_ms, step_ms
+            )
             if positions_ms.size == 0:
                 continue
 
             diff_samples = []
             peak_samples = []
             for position_ms in positions_ms:
-                frame_idx = int((float(position_ms) / 1000.0) * float(sr) / float(hop_length))
+                frame_idx = int(
+                    (float(position_ms) / 1000.0) * float(sr) / float(hop_length)
+                )
                 frame_idx = min(max(frame_idx, 0), divisor_profile.size - 1)
                 diff_samples.append(float(base_diff[frame_idx]))
-                peak_samples.append(self._sample_profile_activity(divisor_profile, hop_length, sr, position_ms))
+                peak_samples.append(
+                    self._sample_profile_activity(
+                        divisor_profile, hop_length, sr, position_ms
+                    )
+                )
 
             diff_samples = np.asarray(diff_samples, dtype=np.float32)
             peak_samples = np.asarray(peak_samples, dtype=np.float32)
@@ -231,34 +265,45 @@ class FeatureExtractor:
 
             diff_threshold = diff_mean + diff_std * 0.35
             peak_threshold = peak_mean + peak_std * 0.35
-            diff_recurrence = float(np.count_nonzero(diff_samples >= diff_threshold)) / float(diff_samples.size)
-            peak_recurrence = float(np.count_nonzero(peak_samples >= peak_threshold)) / float(peak_samples.size)
+            diff_recurrence = float(
+                np.count_nonzero(diff_samples >= diff_threshold)
+            ) / float(diff_samples.size)
+            peak_recurrence = float(
+                np.count_nonzero(peak_samples >= peak_threshold)
+            ) / float(peak_samples.size)
 
             weighted_score = (
                 float(self.config.TRANSIENT_DIFF_WEIGHTS.get(int(divisor), 0.2))
-                * (diff_mean * float(self.config.TRANSIENT_GRADIENT_WEIGHT) + peak_mean * float(self.config.TRANSIENT_PEAK_WEIGHT))
+                * (
+                    diff_mean * float(self.config.TRANSIENT_GRADIENT_WEIGHT)
+                    + peak_mean * float(self.config.TRANSIENT_PEAK_WEIGHT)
+                )
                 * float(self.config.TRANSIENT_LAYER_PRIORS.get(int(divisor), 0.2))
             )
             recurrence_score = (diff_recurrence * 0.6) + (peak_recurrence * 0.4)
             raw_score = max(0.0, weighted_score) * max(0.0, recurrence_score)
 
             metrics[int(divisor)] = {
-                'diff_mean': diff_mean,
-                'diff_recurrence': diff_recurrence,
-                'peak_mean': peak_mean,
-                'peak_recurrence': peak_recurrence,
-                'raw_score': raw_score,
+                "diff_mean": diff_mean,
+                "diff_recurrence": diff_recurrence,
+                "peak_mean": peak_mean,
+                "peak_recurrence": peak_recurrence,
+                "raw_score": raw_score,
             }
             raw_scores[int(divisor)] = raw_score
 
         max_score = max(raw_scores.values(), default=0.0)
         if max_score <= 1e-6:
             for divisor in raw_scores.keys():
-                weights[int(divisor)] = float(self.config.TRANSIENT_LAYER_PRIORS.get(int(divisor), 0.2))
+                weights[int(divisor)] = float(
+                    self.config.TRANSIENT_LAYER_PRIORS.get(int(divisor), 0.2)
+                )
         else:
             for divisor, raw_score in raw_scores.items():
                 normalized = max(0.05, float(raw_score) / float(max_score))
-                weights[int(divisor)] = float(normalized ** float(self.config.TRANSIENT_POWER))
+                weights[int(divisor)] = float(
+                    normalized ** float(self.config.TRANSIENT_POWER)
+                )
 
         return metrics, weights
 
@@ -283,7 +328,9 @@ class FeatureExtractor:
             step_ms = beat_duration_ms / float(divisor)
             if step_ms <= 0:
                 continue
-            positions_ms = np.arange(first_beat_ms, total_duration_ms + step_ms, step_ms)
+            positions_ms = np.arange(
+                first_beat_ms, total_duration_ms + step_ms, step_ms
+            )
             if positions_ms.size == 0:
                 continue
 
@@ -300,9 +347,7 @@ class FeatureExtractor:
             mean_energy = float(np.mean(activities))
             std_energy = float(np.std(activities))
             top_count = max(1, int(round(activities.size * 0.2)))
-            strongest_energy = float(
-                np.mean(np.sort(activities)[-top_count:])
-            )
+            strongest_energy = float(np.mean(np.sort(activities)[-top_count:]))
             recurrence_threshold = mean_energy + std_energy * 0.35
             recurrence_ratio = float(
                 np.count_nonzero(activities >= recurrence_threshold)
@@ -324,7 +369,9 @@ class FeatureExtractor:
         max_score = max(raw_scores.values(), default=0.0)
         if max_score <= 1e-6:
             for divisor in raw_scores.keys():
-                weights[int(divisor)] = float(self.config.GRID_WEIGHT_PRIORS.get(divisor, 0.2))
+                weights[int(divisor)] = float(
+                    self.config.GRID_WEIGHT_PRIORS.get(divisor, 0.2)
+                )
         else:
             for divisor, raw_score in raw_scores.items():
                 weights[int(divisor)] = max(0.05, float(raw_score) / float(max_score))
@@ -369,7 +416,9 @@ class FeatureExtractor:
             if step_ms <= 0:
                 continue
 
-            divisor_profile = self._build_divisor_profile(onset_profiles, energy_profile, divisor)
+            divisor_profile = self._build_divisor_profile(
+                onset_profiles, energy_profile, divisor
+            )
             positions_ms = np.arange(
                 max(float(window_start_ms), float(first_beat_ms)),
                 float(window_end_ms) + step_ms * 0.5,
@@ -381,7 +430,9 @@ class FeatureExtractor:
 
             activities = np.array(
                 [
-                    self._sample_profile_activity(divisor_profile, hop_length, sr, position_ms)
+                    self._sample_profile_activity(
+                        divisor_profile, hop_length, sr, position_ms
+                    )
                     for position_ms in positions_ms
                 ],
                 dtype=np.float32,
@@ -395,13 +446,19 @@ class FeatureExtractor:
             strongest_count = max(1, int(round(activities.size * 0.25)))
             strongest_activity = float(np.mean(np.sort(activities)[-strongest_count:]))
             recurrence_threshold = mean_activity + std_activity * 0.20
-            recurrence_ratio = float(np.count_nonzero(activities >= recurrence_threshold)) / float(activities.size)
+            recurrence_ratio = float(
+                np.count_nonzero(activities >= recurrence_threshold)
+            ) / float(activities.size)
             global_weight = float(
-                (divisor_weights or {}).get(int(divisor), self.config.GRID_WEIGHT_PRIORS.get(int(divisor), 0.2))
+                (divisor_weights or {}).get(
+                    int(divisor), self.config.GRID_WEIGHT_PRIORS.get(int(divisor), 0.2)
+                )
             )
             divisor_score = global_weight * (
-                strongest_activity * float(self.config.SECTION_STATE_LOCAL_ENERGY_WEIGHT)
-                + recurrence_ratio * float(self.config.SECTION_STATE_LOCAL_REPETITION_WEIGHT)
+                strongest_activity
+                * float(self.config.SECTION_STATE_LOCAL_ENERGY_WEIGHT)
+                + recurrence_ratio
+                * float(self.config.SECTION_STATE_LOCAL_REPETITION_WEIGHT)
             )
             family_detail[int(divisor)] = max(0.0, float(divisor_score))
             family_scores[family] += family_detail[int(divisor)]
@@ -432,7 +489,9 @@ class FeatureExtractor:
         beat_duration_ms = 60000.0 / float(bpm)
         window_beats = max(2, int(self.config.BEAT_FAMILY_WINDOW_BEATS))
         window_ms = beat_duration_ms * float(window_beats)
-        total_duration_ms = float(profile.size - 1) * float(hop_length) / float(sr) * 1000.0
+        total_duration_ms = (
+            float(profile.size - 1) * float(hop_length) / float(sr) * 1000.0
+        )
         first_beat_ms = float(first_beat_time) * 1000.0
         windows = []
         window_start_ms = 0.0
@@ -492,14 +551,22 @@ class FeatureExtractor:
 
         for window_index in range(1, window_count):
             for state_index, family in enumerate(family_states):
-                local_score = float(windows[window_index]["family_scores"].get(family, 0.0))
+                local_score = float(
+                    windows[window_index]["family_scores"].get(family, 0.0)
+                )
                 best_total = -np.inf
                 best_prev = -1
                 for prev_index, prev_family in enumerate(family_states):
                     if not np.isfinite(dp[window_index - 1, prev_index]):
                         continue
-                    transition_penalty = -stay_bonus if prev_family == family else switch_penalty
-                    candidate_total = dp[window_index - 1, prev_index] + local_score - transition_penalty
+                    transition_penalty = (
+                        -stay_bonus if prev_family == family else switch_penalty
+                    )
+                    candidate_total = (
+                        dp[window_index - 1, prev_index]
+                        + local_score
+                        - transition_penalty
+                    )
                     if candidate_total > best_total:
                         best_total = candidate_total
                         best_prev = prev_index
@@ -515,13 +582,19 @@ class FeatureExtractor:
             chosen_families.append(family_states[final_state_index])
         chosen_families.reverse()
 
-        total_binary = sum(float(window["family_scores"]["binary"]) for window in windows)
-        total_triplet = sum(float(window["family_scores"]["triplet"]) for window in windows)
+        total_binary = sum(
+            float(window["family_scores"]["binary"]) for window in windows
+        )
+        total_triplet = sum(
+            float(window["family_scores"]["triplet"]) for window in windows
+        )
         global_family = "neutral"
         dominance_threshold = float(self.config.BEAT_FAMILY_GLOBAL_DOMINANCE_THRESHOLD)
         if total_binary > 1e-6 and total_binary >= total_triplet * dominance_threshold:
             global_family = "binary"
-        elif total_triplet > 1e-6 and total_triplet >= total_binary * dominance_threshold:
+        elif (
+            total_triplet > 1e-6 and total_triplet >= total_binary * dominance_threshold
+        ):
             global_family = "triplet"
 
         for window, chosen_family in zip(windows, chosen_families):
@@ -529,7 +602,9 @@ class FeatureExtractor:
             triplet_score = float(window["family_scores"]["triplet"])
             strongest = max(binary_score, triplet_score, 1e-6)
             score_gap_ratio = abs(binary_score - triplet_score) / strongest
-            if chosen_family != "neutral" and score_gap_ratio < float(self.config.BEAT_FAMILY_NEUTRAL_MARGIN):
+            if chosen_family != "neutral" and score_gap_ratio < float(
+                self.config.BEAT_FAMILY_NEUTRAL_MARGIN
+            ):
                 chosen_family = "neutral"
             window["chosen_family"] = chosen_family
             window["score_gap_ratio"] = float(score_gap_ratio)
@@ -569,7 +644,9 @@ class FeatureExtractor:
         }
 
     def _map_divisor_to_section_tier(self, divisor):
-        state_divisors = sorted(int(value) for value in self.config.SECTION_STATE_DIVISORS)
+        state_divisors = sorted(
+            int(value) for value in self.config.SECTION_STATE_DIVISORS
+        )
         if not state_divisors:
             return int(divisor)
         for tier in state_divisors:
@@ -590,7 +667,9 @@ class FeatureExtractor:
         divisor_weights=None,
     ):
         local_scores = {}
-        state_divisors = sorted(int(value) for value in self.config.SECTION_STATE_DIVISORS)
+        state_divisors = sorted(
+            int(value) for value in self.config.SECTION_STATE_DIVISORS
+        )
 
         for divisor in state_divisors:
             if divisor <= 0:
@@ -599,7 +678,9 @@ class FeatureExtractor:
             if step_ms <= 0:
                 continue
 
-            divisor_profile = self._build_divisor_profile(onset_profiles, energy_profile, divisor)
+            divisor_profile = self._build_divisor_profile(
+                onset_profiles, energy_profile, divisor
+            )
             positions_ms = np.arange(
                 max(float(window_start_ms), float(first_beat_ms)),
                 float(window_end_ms) + step_ms * 0.5,
@@ -611,7 +692,9 @@ class FeatureExtractor:
 
             activities = np.array(
                 [
-                    self._sample_profile_activity(divisor_profile, hop_length, sr, position_ms)
+                    self._sample_profile_activity(
+                        divisor_profile, hop_length, sr, position_ms
+                    )
                     for position_ms in positions_ms
                 ],
                 dtype=np.float32,
@@ -625,11 +708,19 @@ class FeatureExtractor:
             top_count = max(1, int(round(activities.size * 0.25)))
             strongest_activity = float(np.mean(np.sort(activities)[-top_count:]))
             recurrence_threshold = mean_activity + std_activity * 0.20
-            recurrence_ratio = float(np.count_nonzero(activities >= recurrence_threshold)) / float(activities.size)
-            global_weight = float((divisor_weights or {}).get(int(divisor), self.config.GRID_WEIGHT_PRIORS.get(int(divisor), 0.2)))
+            recurrence_ratio = float(
+                np.count_nonzero(activities >= recurrence_threshold)
+            ) / float(activities.size)
+            global_weight = float(
+                (divisor_weights or {}).get(
+                    int(divisor), self.config.GRID_WEIGHT_PRIORS.get(int(divisor), 0.2)
+                )
+            )
             score = global_weight * (
-                strongest_activity * float(self.config.SECTION_STATE_LOCAL_ENERGY_WEIGHT)
-                + recurrence_ratio * float(self.config.SECTION_STATE_LOCAL_REPETITION_WEIGHT)
+                strongest_activity
+                * float(self.config.SECTION_STATE_LOCAL_ENERGY_WEIGHT)
+                + recurrence_ratio
+                * float(self.config.SECTION_STATE_LOCAL_REPETITION_WEIGHT)
             )
             local_scores[int(divisor)] = max(0.0, float(score))
 
@@ -645,7 +736,9 @@ class FeatureExtractor:
         onset_profiles=None,
         divisor_weights=None,
     ):
-        state_divisors = sorted(int(value) for value in self.config.SECTION_STATE_DIVISORS)
+        state_divisors = sorted(
+            int(value) for value in self.config.SECTION_STATE_DIVISORS
+        )
         profile = np.asarray(energy_profile, dtype=np.float32)
         if profile.size == 0 or bpm <= 0 or not state_divisors:
             return {
@@ -657,7 +750,9 @@ class FeatureExtractor:
         beat_duration_ms = 60000.0 / float(bpm)
         window_beats = max(2, int(self.config.SECTION_STATE_WINDOW_BEATS))
         window_ms = beat_duration_ms * float(window_beats)
-        total_duration_ms = float(profile.size - 1) * float(hop_length) / float(sr) * 1000.0
+        total_duration_ms = (
+            float(profile.size - 1) * float(hop_length) / float(sr) * 1000.0
+        )
         first_beat_ms = float(first_beat_time) * 1000.0
         windows = []
         window_start_ms = 0.0
@@ -684,14 +779,17 @@ class FeatureExtractor:
                     if divisor <= state_divisor:
                         contribution = local_score
                         if divisor < state_divisor:
-                            contribution *= float(self.config.SECTION_STATE_ALLOW_COARSER_WEIGHT)
+                            contribution *= float(
+                                self.config.SECTION_STATE_ALLOW_COARSER_WEIGHT
+                            )
                         allowed_score += contribution
                     else:
                         suppressed_score += local_score
 
                 state_score = (
                     allowed_score
-                    - suppressed_score * float(self.config.SECTION_STATE_FINE_DIVISOR_PENALTY)
+                    - suppressed_score
+                    * float(self.config.SECTION_STATE_FINE_DIVISOR_PENALTY)
                 ) * float(self.config.SECTION_STATE_PRIORS.get(int(state_divisor), 0.2))
                 state_scores[int(state_divisor)] = float(state_score)
 
@@ -721,23 +819,36 @@ class FeatureExtractor:
         switch_distance_scale = float(self.config.SECTION_STATE_SWITCH_DISTANCE_SCALE)
 
         for state_index, state_divisor in enumerate(state_divisors):
-            dp[0, state_index] = float(windows[0]["state_scores"].get(int(state_divisor), 0.0))
+            dp[0, state_index] = float(
+                windows[0]["state_scores"].get(int(state_divisor), 0.0)
+            )
 
         for window_index in range(1, window_count):
             for state_index, state_divisor in enumerate(state_divisors):
-                local_score = float(windows[window_index]["state_scores"].get(int(state_divisor), 0.0))
+                local_score = float(
+                    windows[window_index]["state_scores"].get(int(state_divisor), 0.0)
+                )
                 best_total = -np.inf
                 best_prev = -1
                 for prev_index, prev_state_divisor in enumerate(state_divisors):
                     if not np.isfinite(dp[window_index - 1, prev_index]):
                         continue
-                    distance = abs(np.log2(float(state_divisor)) - np.log2(float(prev_state_divisor)))
+                    distance = abs(
+                        np.log2(float(state_divisor))
+                        - np.log2(float(prev_state_divisor))
+                    )
                     transition_penalty = 0.0
                     if prev_state_divisor != state_divisor:
-                        transition_penalty = switch_penalty * (1.0 + distance * switch_distance_scale)
+                        transition_penalty = switch_penalty * (
+                            1.0 + distance * switch_distance_scale
+                        )
                     else:
                         transition_penalty = -stay_bonus
-                    candidate_total = dp[window_index - 1, prev_index] + local_score - transition_penalty
+                    candidate_total = (
+                        dp[window_index - 1, prev_index]
+                        + local_score
+                        - transition_penalty
+                    )
                     if candidate_total > best_total:
                         best_total = candidate_total
                         best_prev = prev_index
@@ -758,7 +869,9 @@ class FeatureExtractor:
             max_local_score = max(local_scores.values(), default=0.0)
             if max_local_score <= 1e-6:
                 normalized_scores = {
-                    int(divisor): float(self.config.SECTION_STATE_PRIORS.get(int(divisor), 0.2))
+                    int(divisor): float(
+                        self.config.SECTION_STATE_PRIORS.get(int(divisor), 0.2)
+                    )
                     for divisor in state_divisors
                 }
             else:
@@ -770,14 +883,17 @@ class FeatureExtractor:
             anchor_divisors = [
                 int(divisor)
                 for divisor, score in normalized_scores.items()
-                if int(divisor) <= int(chosen_state) and float(score) >= anchor_threshold
+                if int(divisor) <= int(chosen_state)
+                and float(score) >= anchor_threshold
             ]
             if int(chosen_state) not in anchor_divisors:
                 anchor_divisors.append(int(chosen_state))
             anchor_divisors = sorted(set(anchor_divisors))
             window["chosen_state_divisor"] = int(chosen_state)
             window["normalized_local_scores"] = normalized_scores
-            window["chosen_state_score"] = float(window["state_scores"].get(int(chosen_state), 0.0))
+            window["chosen_state_score"] = float(
+                window["state_scores"].get(int(chosen_state), 0.0)
+            )
             window["anchor_divisors"] = anchor_divisors
 
         stable_segments = []
@@ -818,7 +934,9 @@ class FeatureExtractor:
         window_ms = float(section_divisor_state.get("window_ms", 0.0))
         if window_ms <= 0:
             return None
-        first_window_start_ms = float(section_divisor_state.get("first_window_start_ms", 0.0))
+        first_window_start_ms = float(
+            section_divisor_state.get("first_window_start_ms", 0.0)
+        )
         window_index = int((float(time_ms) - first_window_start_ms) // window_ms)
         window_index = max(0, min(window_index, len(windows) - 1))
         return windows[window_index]
@@ -832,7 +950,9 @@ class FeatureExtractor:
         window_ms = float(beat_family_state.get("window_ms", 0.0))
         if window_ms <= 0:
             return None
-        first_window_start_ms = float(beat_family_state.get("first_window_start_ms", 0.0))
+        first_window_start_ms = float(
+            beat_family_state.get("first_window_start_ms", 0.0)
+        )
         window_index = int((float(time_ms) - first_window_start_ms) // window_ms)
         window_index = max(0, min(window_index, len(windows) - 1))
         return windows[window_index]
@@ -841,7 +961,9 @@ class FeatureExtractor:
         if not bars:
             return [], [], []
 
-        profiles = [np.asarray(bar.get("slot_profile", []), dtype=np.float32) for bar in bars]
+        profiles = [
+            np.asarray(bar.get("slot_profile", []), dtype=np.float32) for bar in bars
+        ]
         audio_values = np.array(
             [float(np.mean(bar.get("slot_onsets", []))) for bar in bars],
             dtype=np.float32,
@@ -854,21 +976,32 @@ class FeatureExtractor:
             left_start = max(0, bar_index - radius)
             right_end = min(len(bars), bar_index + 1 + radius)
             left_profiles = profiles[left_start:bar_index]
-            right_profiles = profiles[bar_index + 1:right_end]
+            right_profiles = profiles[bar_index + 1 : right_end]
             if left_profiles and right_profiles:
                 left_mean = np.mean(np.vstack(left_profiles), axis=0)
                 right_mean = np.mean(np.vstack(right_profiles), axis=0)
-                novelty[bar_index] = 1.0 - self._slot_pattern_similarity(left_mean, right_mean)
+                novelty[bar_index] = 1.0 - self._slot_pattern_similarity(
+                    left_mean, right_mean
+                )
 
-            audio_left = float(np.mean(audio_values[left_start:bar_index])) if bar_index > left_start else float(audio_values[max(0, bar_index - 1)])
-            audio_right = float(np.mean(audio_values[bar_index + 1:right_end])) if right_end > bar_index + 1 else float(audio_values[bar_index])
+            audio_left = (
+                float(np.mean(audio_values[left_start:bar_index]))
+                if bar_index > left_start
+                else float(audio_values[max(0, bar_index - 1)])
+            )
+            audio_right = (
+                float(np.mean(audio_values[bar_index + 1 : right_end]))
+                if right_end > bar_index + 1
+                else float(audio_values[bar_index])
+            )
             audio_novelty[bar_index] = abs(audio_right - audio_left)
 
         novelty = self._normalize_slot_vector(novelty)
         audio_novelty = self._normalize_slot_vector(audio_novelty)
         combined = self._normalize_slot_vector(
             novelty * float(self.config.BAR_PATTERN_SECTION_PATTERN_NOVELTY_WEIGHT)
-            + audio_novelty * float(self.config.BAR_PATTERN_SECTION_AUDIO_NOVELTY_WEIGHT)
+            + audio_novelty
+            * float(self.config.BAR_PATTERN_SECTION_AUDIO_NOVELTY_WEIGHT)
         )
         return novelty.tolist(), audio_novelty.tolist(), combined.tolist()
 
@@ -878,7 +1011,11 @@ class FeatureExtractor:
 
         novelty, audio_novelty, combined = self._build_bar_section_novelty(bars)
         novelty_array = np.asarray(combined, dtype=np.float32)
-        threshold = float(np.mean(novelty_array) + np.std(novelty_array) * float(self.config.BAR_PATTERN_SECTION_THRESHOLD_STD))
+        threshold = float(
+            np.mean(novelty_array)
+            + np.std(novelty_array)
+            * float(self.config.BAR_PATTERN_SECTION_THRESHOLD_STD)
+        )
         min_section_bars = max(2, int(self.config.BAR_PATTERN_SECTION_MIN_BARS))
         boundaries = [0]
 
@@ -886,7 +1023,9 @@ class FeatureExtractor:
             value = float(novelty_array[bar_index])
             if value < threshold:
                 continue
-            if value < float(novelty_array[bar_index - 1]) or value < float(novelty_array[bar_index + 1]):
+            if value < float(novelty_array[bar_index - 1]) or value < float(
+                novelty_array[bar_index + 1]
+            ):
                 continue
             if bar_index - boundaries[-1] < min_section_bars:
                 continue
@@ -910,7 +1049,11 @@ class FeatureExtractor:
                     "start_ms": float(bars[start_bar]["start_ms"]),
                     "end_ms": float(bars[end_bar - 1]["end_ms"]),
                     "bar_count": int(end_bar - start_bar),
-                    "novelty_peak": float(np.max(novelty_array[start_bar:end_bar])) if end_bar > start_bar else 0.0,
+                    "novelty_peak": (
+                        float(np.max(novelty_array[start_bar:end_bar]))
+                        if end_bar > start_bar
+                        else 0.0
+                    ),
                 }
             )
 
@@ -922,30 +1065,49 @@ class FeatureExtractor:
             return {"prototypes": [], "assignments": []}
 
         section_bar_count = len(section_bars)
-        if section_bar_count < int(self.config.BAR_PATTERN_PROTOTYPE_MEDIUM_SECTION_BARS):
+        if section_bar_count < int(
+            self.config.BAR_PATTERN_PROTOTYPE_MEDIUM_SECTION_BARS
+        ):
             prototype_count = 1
-        elif section_bar_count < int(self.config.BAR_PATTERN_PROTOTYPE_LARGE_SECTION_BARS):
+        elif section_bar_count < int(
+            self.config.BAR_PATTERN_PROTOTYPE_LARGE_SECTION_BARS
+        ):
             prototype_count = 2
         else:
             prototype_count = int(self.config.BAR_PATTERN_PROTOTYPE_MAX_COUNT)
 
-        profiles = [np.asarray(bar.get("slot_profile", []), dtype=np.float32) for bar in section_bars]
+        profiles = [
+            np.asarray(bar.get("slot_profile", []), dtype=np.float32)
+            for bar in section_bars
+        ]
+        detail_profiles = [
+            np.asarray(bar.get("detail_slot_profile", []), dtype=np.float32)
+            for bar in section_bars
+        ]
         similarity_matrix = np.eye(section_bar_count, dtype=np.float32)
         for left_index in range(section_bar_count):
             for right_index in range(left_index + 1, section_bar_count):
-                similarity = self._slot_pattern_similarity(profiles[left_index], profiles[right_index])
+                similarity = self._slot_pattern_similarity(
+                    profiles[left_index], profiles[right_index]
+                )
                 similarity_matrix[left_index, right_index] = similarity
                 similarity_matrix[right_index, left_index] = similarity
 
         mean_support = np.mean(similarity_matrix, axis=1)
         prototype_local_indices = [int(np.argmax(mean_support))]
-        while len(prototype_local_indices) < prototype_count and len(prototype_local_indices) < section_bar_count:
+        while (
+            len(prototype_local_indices) < prototype_count
+            and len(prototype_local_indices) < section_bar_count
+        ):
             best_candidate = -1
             best_distance = -1.0
             for local_index in range(section_bar_count):
                 if local_index in prototype_local_indices:
                     continue
-                min_similarity = max(float(similarity_matrix[local_index, proto_index]) for proto_index in prototype_local_indices)
+                min_similarity = max(
+                    float(similarity_matrix[local_index, proto_index])
+                    for proto_index in prototype_local_indices
+                )
                 distance = 1.0 - min_similarity
                 if distance > best_distance:
                     best_distance = distance
@@ -957,6 +1119,7 @@ class FeatureExtractor:
         prototypes = []
         assignments = []
         assignment_counts = {}
+        assignment_members = {}
         for local_index in range(section_bar_count):
             best_proto = prototype_local_indices[0]
             best_similarity = -1.0
@@ -973,19 +1136,158 @@ class FeatureExtractor:
                     "similarity": float(best_similarity),
                 }
             )
-            assignment_counts[prototype_bar_index] = int(assignment_counts.get(prototype_bar_index, 0) + 1)
+            assignment_counts[prototype_bar_index] = int(
+                assignment_counts.get(prototype_bar_index, 0) + 1
+            )
+            assignment_members.setdefault(prototype_bar_index, []).append(
+                int(local_index)
+            )
 
         for proto_local_index in prototype_local_indices:
             absolute_index = int(start_index + proto_local_index)
             prototype_bar = bars[absolute_index]
+            assigned_local_indices = list(assignment_members.get(absolute_index, []))
+            assigned_slot_profiles = [
+                profiles[local_index]
+                for local_index in assigned_local_indices
+                if profiles[local_index].size > 0
+            ]
+            if assigned_slot_profiles:
+                aggregated_slot_profile = np.mean(
+                    np.stack(assigned_slot_profiles, axis=0), axis=0
+                )
+            else:
+                aggregated_slot_profile = np.asarray(
+                    prototype_bar.get("slot_profile", []), dtype=np.float32
+                )
+            normalized_slot_profile = self._normalize_slot_vector(
+                aggregated_slot_profile
+            )
+            slot_count_vectors = [
+                np.asarray(
+                    section_bars[local_index].get("slot_note_counts", []),
+                    dtype=np.float32,
+                )
+                for local_index in assigned_local_indices
+                if np.asarray(
+                    section_bars[local_index].get("slot_note_counts", []),
+                    dtype=np.float32,
+                ).size
+                > 0
+            ]
+            if slot_count_vectors:
+                aggregated_slot_counts = np.mean(
+                    np.stack(slot_count_vectors, axis=0), axis=0
+                )
+            else:
+                aggregated_slot_counts = np.asarray(
+                    prototype_bar.get("slot_note_counts", []), dtype=np.float32
+                )
+            active_slots = []
+            if normalized_slot_profile.size > 0:
+                max_slot_score = float(np.max(normalized_slot_profile))
+                active_threshold = max_slot_score * float(
+                    self.config.BAR_PATTERN_PROTOTYPE_KEEP_RATIO
+                )
+                active_slots = [
+                    int(slot_index)
+                    for slot_index, value in enumerate(normalized_slot_profile.tolist())
+                    if max_slot_score > 1e-6 and float(value) >= active_threshold
+                ]
+            min_active_slots = max(1, int(self.config.BAR_PATTERN_MIN_ACTIVE_SLOTS))
+            if (
+                len(active_slots) < min_active_slots
+                and normalized_slot_profile.size > 0
+            ):
+                ranked_slots = list(np.argsort(normalized_slot_profile))[::-1]
+                for slot_index in ranked_slots:
+                    slot_index = int(slot_index)
+                    if slot_index not in active_slots:
+                        active_slots.append(slot_index)
+                    if len(active_slots) >= min_active_slots:
+                        break
+            active_slots = sorted(set(active_slots))
+            slot_count_template = [
+                int(max(1, min(3, round(float(value))))) if index in active_slots else 0
+                for index, value in enumerate(aggregated_slot_counts.tolist())
+            ]
+
+            assigned_detail_profiles = [
+                detail_profiles[local_index]
+                for local_index in assigned_local_indices
+                if detail_profiles[local_index].size > 0
+            ]
+            if assigned_detail_profiles:
+                aggregated_detail_profile = np.mean(
+                    np.stack(assigned_detail_profiles, axis=0), axis=0
+                )
+            else:
+                aggregated_detail_profile = np.asarray(
+                    prototype_bar.get("detail_slot_profile", []), dtype=np.float32
+                )
+            normalized_detail_profile = self._normalize_slot_vector(
+                aggregated_detail_profile
+            )
+            detail_template_candidates = []
+            if normalized_detail_profile.size > 0:
+                max_detail_score = float(np.max(normalized_detail_profile))
+                detail_threshold = max_detail_score * float(
+                    self.config.BAR_PATTERN_DETAIL_TEMPLATE_KEEP_RATIO
+                )
+                detail_slots_per_beat = max(
+                    1, int(self.config.BAR_PATTERN_DETAIL_SLOTS_PER_BEAT)
+                )
+                coarse_stride = max(
+                    1,
+                    detail_slots_per_beat
+                    // max(1, int(self.config.BAR_PATTERN_SLOTS_PER_BEAT)),
+                )
+                for detail_slot_index, value in enumerate(
+                    normalized_detail_profile.tolist()
+                ):
+                    if coarse_stride > 0 and detail_slot_index % coarse_stride == 0:
+                        continue
+                    if max_detail_score > 1e-6 and float(value) >= detail_threshold:
+                        detail_template_candidates.append(
+                            (int(detail_slot_index), float(value))
+                        )
+                detail_template_candidates.sort(key=lambda item: item[1], reverse=True)
+                detail_template_candidates = detail_template_candidates[
+                    : max(0, int(self.config.BAR_PATTERN_DETAIL_TEMPLATE_MAX_SLOTS))
+                ]
+            detail_slot_template = [int(item[0]) for item in detail_template_candidates]
+            if len(assigned_local_indices) < int(
+                self.config.BAR_PATTERN_DETAIL_TEMPLATE_MIN_ASSIGN_BARS
+            ):
+                detail_slot_template = list(
+                    prototype_bar.get("preliminary_detail_slots", [])
+                )
+                normalized_detail_profile = np.asarray(
+                    prototype_bar.get("detail_slot_profile", []), dtype=np.float32
+                )
+
             prototypes.append(
                 {
                     "prototype_bar_index": absolute_index,
-                    "active_slots": list(prototype_bar.get("preliminary_active_slots", [])),
-                    "slot_profile": list(prototype_bar.get("slot_profile", [])),
-                    "slot_count_template": [int(min(3, value)) for value in prototype_bar.get("slot_note_counts", [])],
+                    "active_slots": [int(value) for value in active_slots],
+                    "slot_profile": (
+                        normalized_slot_profile.tolist()
+                        if isinstance(normalized_slot_profile, np.ndarray)
+                        else list(normalized_slot_profile)
+                    ),
+                    "slot_count_template": slot_count_template,
+                    "detail_slot_template": [
+                        int(value) for value in detail_slot_template
+                    ],
+                    "detail_slot_profile": (
+                        normalized_detail_profile.tolist()
+                        if isinstance(normalized_detail_profile, np.ndarray)
+                        else list(normalized_detail_profile)
+                    ),
                     "chosen_family": str(prototype_bar.get("chosen_family", "neutral")),
-                    "section_state_divisor": int(prototype_bar.get("section_state_divisor", 0)),
+                    "section_state_divisor": int(
+                        prototype_bar.get("section_state_divisor", 0)
+                    ),
                     "assigned_bars": int(assignment_counts.get(absolute_index, 0)),
                 }
             )
@@ -1018,14 +1320,24 @@ class FeatureExtractor:
         beat_duration_ms = 60000.0 / float(bpm)
         bar_ms = beat_duration_ms * float(beats_per_bar)
         slot_ms = beat_duration_ms / float(slots_per_beat)
+        detail_slots_per_beat = max(
+            1, int(self.config.BAR_PATTERN_DETAIL_SLOTS_PER_BEAT)
+        )
+        total_detail_slots = beats_per_bar * detail_slots_per_beat
+        detail_slot_ms = beat_duration_ms / float(detail_slots_per_beat)
         first_beat_ms = float(first_beat_time) * 1000.0
         bar_origin_ms = first_beat_ms
         while bar_origin_ms > 0.0:
             bar_origin_ms -= bar_ms
 
         profile = self._normalize_profile(onset_profile)
-        last_note_ms = max(float(note.get("end_time", note.get("aligned_time", 0.0))) for note in notes)
-        total_duration_ms = max(last_note_ms, float(profile.size - 1) * float(hop_length) / float(sr) * 1000.0)
+        last_note_ms = max(
+            float(note.get("end_time", note.get("aligned_time", 0.0))) for note in notes
+        )
+        total_duration_ms = max(
+            last_note_ms,
+            float(profile.size - 1) * float(hop_length) / float(sr) * 1000.0,
+        )
         bars = []
         previous_active_slots = set()
         previous_family = "neutral"
@@ -1035,17 +1347,41 @@ class FeatureExtractor:
         while bar_start_ms <= total_duration_ms + bar_ms + 1e-3:
             bar_end_ms = bar_start_ms + bar_ms
             bar_mid_ms = bar_start_ms + bar_ms * 0.5
-            family_window = self._resolve_beat_family_window(bar_mid_ms, beat_family_state)
-            section_window = self._resolve_section_window(bar_mid_ms, section_divisor_state)
-            chosen_family = str(family_window.get("chosen_family", "neutral")) if family_window else "neutral"
-            chosen_state_divisor = int(section_window.get("chosen_state_divisor", 8)) if section_window else 8
+            family_window = self._resolve_beat_family_window(
+                bar_mid_ms, beat_family_state
+            )
+            section_window = self._resolve_section_window(
+                bar_mid_ms, section_divisor_state
+            )
+            chosen_family = (
+                str(family_window.get("chosen_family", "neutral"))
+                if family_window
+                else "neutral"
+            )
+            chosen_state_divisor = (
+                int(section_window.get("chosen_state_divisor", 8))
+                if section_window
+                else 8
+            )
 
             slot_onsets = np.zeros(total_slots, dtype=np.float32)
             slot_occupancy = np.zeros(total_slots, dtype=np.float32)
             slot_note_counts = np.zeros(total_slots, dtype=np.float32)
+            detail_slot_onsets = np.zeros(total_detail_slots, dtype=np.float32)
+            detail_slot_occupancy = np.zeros(total_detail_slots, dtype=np.float32)
+            detail_slot_note_counts = np.zeros(total_detail_slots, dtype=np.float32)
             for slot_index in range(total_slots):
                 slot_time_ms = bar_start_ms + float(slot_index) * slot_ms
-                slot_onsets[slot_index] = self._sample_profile_activity(profile, hop_length, sr, slot_time_ms)
+                slot_onsets[slot_index] = self._sample_profile_activity(
+                    profile, hop_length, sr, slot_time_ms
+                )
+            for detail_slot_index in range(total_detail_slots):
+                detail_slot_time_ms = (
+                    bar_start_ms + float(detail_slot_index) * detail_slot_ms
+                )
+                detail_slot_onsets[detail_slot_index] = self._sample_profile_activity(
+                    profile, hop_length, sr, detail_slot_time_ms
+                )
 
             for note in notes:
                 note_time_ms = float(note.get("aligned_time", 0.0))
@@ -1053,23 +1389,51 @@ class FeatureExtractor:
                     continue
                 slot_index = int(round((note_time_ms - bar_start_ms) / slot_ms))
                 slot_index = max(0, min(slot_index, total_slots - 1))
-                slot_occupancy[slot_index] += max(1.0, float(note.get("magnitude", 0.0)))
+                detail_slot_index = int(
+                    round((note_time_ms - bar_start_ms) / detail_slot_ms)
+                )
+                detail_slot_index = max(
+                    0, min(detail_slot_index, total_detail_slots - 1)
+                )
+                note_weight = max(1.0, float(note.get("magnitude", 0.0)))
+                slot_occupancy[slot_index] += note_weight
                 slot_note_counts[slot_index] += 1.0
+                detail_slot_occupancy[detail_slot_index] += note_weight
+                detail_slot_note_counts[detail_slot_index] += 1.0
 
-            max_occupancy = float(np.max(slot_occupancy)) if slot_occupancy.size > 0 else 0.0
+            max_occupancy = (
+                float(np.max(slot_occupancy)) if slot_occupancy.size > 0 else 0.0
+            )
             if max_occupancy > 1e-6:
                 slot_occupancy /= max_occupancy
-
-            raw_slot_scores = (
-                slot_onsets * float(self.config.BAR_PATTERN_ONSET_WEIGHT)
-                + slot_occupancy * float(self.config.BAR_PATTERN_OCCUPANCY_WEIGHT)
+            max_detail_occupancy = (
+                float(np.max(detail_slot_occupancy))
+                if detail_slot_occupancy.size > 0
+                else 0.0
             )
+            if max_detail_occupancy > 1e-6:
+                detail_slot_occupancy /= max_detail_occupancy
 
-            if previous_active_slots and chosen_family == previous_family and chosen_state_divisor == previous_state_divisor:
+            raw_slot_scores = slot_onsets * float(
+                self.config.BAR_PATTERN_ONSET_WEIGHT
+            ) + slot_occupancy * float(self.config.BAR_PATTERN_OCCUPANCY_WEIGHT)
+            raw_detail_scores = detail_slot_onsets * float(
+                self.config.BAR_PATTERN_ONSET_WEIGHT
+            ) + detail_slot_occupancy * float(self.config.BAR_PATTERN_OCCUPANCY_WEIGHT)
+
+            if (
+                previous_active_slots
+                and chosen_family == previous_family
+                and chosen_state_divisor == previous_state_divisor
+            ):
                 for slot_index in previous_active_slots:
-                    raw_slot_scores[slot_index] += float(self.config.BAR_PATTERN_INHERIT_BONUS)
+                    raw_slot_scores[slot_index] += float(
+                        self.config.BAR_PATTERN_INHERIT_BONUS
+                    )
 
-            max_score = float(np.max(raw_slot_scores)) if raw_slot_scores.size > 0 else 0.0
+            max_score = (
+                float(np.max(raw_slot_scores)) if raw_slot_scores.size > 0 else 0.0
+            )
             threshold = max_score * float(self.config.BAR_PATTERN_SLOT_THRESHOLD)
             preliminary_active_slots = {
                 int(slot_index)
@@ -1077,8 +1441,14 @@ class FeatureExtractor:
                 if score >= threshold and max_score > 1e-6
             }
 
-            if previous_active_slots and chosen_family == previous_family and chosen_state_divisor == previous_state_divisor:
-                keep_threshold = max_score * float(self.config.BAR_PATTERN_NEIGHBOR_KEEP_THRESHOLD)
+            if (
+                previous_active_slots
+                and chosen_family == previous_family
+                and chosen_state_divisor == previous_state_divisor
+            ):
+                keep_threshold = max_score * float(
+                    self.config.BAR_PATTERN_NEIGHBOR_KEEP_THRESHOLD
+                )
                 for slot_index in previous_active_slots:
                     if raw_slot_scores[slot_index] >= keep_threshold:
                         preliminary_active_slots.add(int(slot_index))
@@ -1090,6 +1460,17 @@ class FeatureExtractor:
                     preliminary_active_slots.add(int(slot_index))
                     if len(preliminary_active_slots) >= min_active_slots:
                         break
+            detail_max_score = (
+                float(np.max(raw_detail_scores)) if raw_detail_scores.size > 0 else 0.0
+            )
+            detail_threshold = detail_max_score * float(
+                self.config.BAR_PATTERN_DETAIL_SLOT_THRESHOLD
+            )
+            preliminary_detail_slots = {
+                int(slot_index)
+                for slot_index, score in enumerate(raw_detail_scores.tolist())
+                if score >= detail_threshold and detail_max_score > 1e-6
+            }
 
             bars.append(
                 {
@@ -1097,17 +1478,28 @@ class FeatureExtractor:
                     "end_ms": float(bar_end_ms),
                     "slot_ms": float(slot_ms),
                     "slot_scores": raw_slot_scores.tolist(),
-                    "slot_profile": self._normalize_slot_vector(raw_slot_scores).tolist(),
+                    "slot_profile": self._normalize_slot_vector(
+                        raw_slot_scores
+                    ).tolist(),
                     "slot_onsets": slot_onsets.tolist(),
                     "slot_occupancy": slot_occupancy.tolist(),
                     "slot_note_counts": slot_note_counts.tolist(),
+                    "detail_slot_ms": float(detail_slot_ms),
+                    "detail_slot_scores": raw_detail_scores.tolist(),
+                    "detail_slot_profile": self._normalize_slot_vector(
+                        raw_detail_scores
+                    ).tolist(),
+                    "detail_slot_note_counts": detail_slot_note_counts.tolist(),
                     "preliminary_active_slots": sorted(preliminary_active_slots),
+                    "preliminary_detail_slots": sorted(preliminary_detail_slots),
                     "active_slots": sorted(preliminary_active_slots),
                     "chosen_family": chosen_family,
                     "section_state_divisor": int(chosen_state_divisor),
                     "prototype_similarity": 0.0,
                     "prototype_bar_index": -1,
                     "prototype_slot_template": [0] * total_slots,
+                    "prototype_detail_template": [],
+                    "prototype_detail_profile": [],
                     "bar_index": int(len(bars)),
                     "section_index": -1,
                 }
@@ -1117,11 +1509,15 @@ class FeatureExtractor:
             previous_state_divisor = int(chosen_state_divisor)
             bar_start_ms += bar_ms
 
-        sections, novelty, audio_novelty, combined_novelty = self._segment_bar_sections(bars)
+        sections, novelty, audio_novelty, combined_novelty = self._segment_bar_sections(
+            bars
+        )
         for section in sections:
             start_index = int(section.get("start_bar_index", 0))
             end_index = int(section.get("end_bar_index", start_index))
-            motif_data = self._extract_section_bar_prototypes(bars, start_index, end_index)
+            motif_data = self._extract_section_bar_prototypes(
+                bars, start_index, end_index
+            )
             section["prototypes"] = motif_data.get("prototypes", [])
             section["assignments"] = motif_data.get("assignments", [])
 
@@ -1130,8 +1526,7 @@ class FeatureExtractor:
                 for item in section["prototypes"]
             }
             assignment_lookup = {
-                int(item.get("bar_index", -1)): item
-                for item in section["assignments"]
+                int(item.get("bar_index", -1)): item for item in section["assignments"]
             }
 
             for bar_index in range(start_index, end_index):
@@ -1142,19 +1537,36 @@ class FeatureExtractor:
                     continue
                 prototype_bar_index = int(assignment.get("prototype_bar_index", -1))
                 prototype = prototype_lookup.get(prototype_bar_index)
-                raw_slot_scores = np.asarray(bar.get("slot_scores", []), dtype=np.float32)
-                max_score = float(np.max(raw_slot_scores)) if raw_slot_scores.size > 0 else 0.0
-                prototype_slots = list(prototype.get("active_slots", [])) if prototype else list(bar.get("preliminary_active_slots", []))
-                initial_active_slots = set(int(value) for value in bar.get("preliminary_active_slots", []))
+                raw_slot_scores = np.asarray(
+                    bar.get("slot_scores", []), dtype=np.float32
+                )
+                max_score = (
+                    float(np.max(raw_slot_scores)) if raw_slot_scores.size > 0 else 0.0
+                )
+                prototype_slots = (
+                    list(prototype.get("active_slots", []))
+                    if prototype
+                    else list(bar.get("preliminary_active_slots", []))
+                )
+                initial_active_slots = set(
+                    int(value) for value in bar.get("preliminary_active_slots", [])
+                )
                 final_slots = set()
 
                 keep_ratio = float(self.config.BAR_PATTERN_PROTOTYPE_KEEP_RATIO)
                 for slot_index in prototype_slots:
                     slot_index = int(slot_index)
-                    if slot_index in initial_active_slots or (max_score > 1e-6 and raw_slot_scores[slot_index] >= max_score * keep_ratio):
+                    if slot_index in initial_active_slots or (
+                        max_score > 1e-6
+                        and raw_slot_scores[slot_index] >= max_score * keep_ratio
+                    ):
                         final_slots.add(slot_index)
 
-                if bool(self.config.BAR_PATTERN_PROTOTYPE_FORCE_COPY) and prototype_slots and len(final_slots) < max(1, min_active_slots):
+                if (
+                    bool(self.config.BAR_PATTERN_PROTOTYPE_FORCE_COPY)
+                    and prototype_slots
+                    and len(final_slots) < max(1, min_active_slots)
+                ):
                     ranked_proto_slots = sorted(
                         set(int(value) for value in prototype_slots),
                         key=lambda slot: float(raw_slot_scores[slot]),
@@ -1165,14 +1577,22 @@ class FeatureExtractor:
                         if len(final_slots) >= max(1, min_active_slots):
                             break
 
-                extra_threshold = max_score * float(self.config.BAR_PATTERN_PROTOTYPE_EXTRA_RATIO)
-                max_extra_slots = max(0, int(self.config.BAR_PATTERN_PROTOTYPE_MAX_EXTRA_SLOTS))
+                extra_threshold = max_score * float(
+                    self.config.BAR_PATTERN_PROTOTYPE_EXTRA_RATIO
+                )
+                max_extra_slots = max(
+                    0, int(self.config.BAR_PATTERN_PROTOTYPE_MAX_EXTRA_SLOTS)
+                )
                 extra_candidates = [
                     int(slot_index)
                     for slot_index, score in enumerate(raw_slot_scores.tolist())
-                    if int(slot_index) not in final_slots and score >= extra_threshold and max_score > 1e-6
+                    if int(slot_index) not in final_slots
+                    and score >= extra_threshold
+                    and max_score > 1e-6
                 ]
-                extra_candidates.sort(key=lambda slot: float(raw_slot_scores[slot]), reverse=True)
+                extra_candidates.sort(
+                    key=lambda slot: float(raw_slot_scores[slot]), reverse=True
+                )
                 for slot_index in extra_candidates[:max_extra_slots]:
                     final_slots.add(int(slot_index))
 
@@ -1186,7 +1606,21 @@ class FeatureExtractor:
                 bar["active_slots"] = sorted(final_slots)
                 bar["prototype_bar_index"] = int(prototype_bar_index)
                 bar["prototype_similarity"] = float(assignment.get("similarity", 0.0))
-                bar["prototype_slot_template"] = list(prototype.get("slot_count_template", [])) if prototype else [0] * total_slots
+                bar["prototype_slot_template"] = (
+                    list(prototype.get("slot_count_template", []))
+                    if prototype
+                    else [0] * total_slots
+                )
+                bar["prototype_detail_template"] = (
+                    list(prototype.get("detail_slot_template", []))
+                    if prototype
+                    else list(bar.get("preliminary_detail_slots", []))
+                )
+                bar["prototype_detail_profile"] = (
+                    list(prototype.get("detail_slot_profile", []))
+                    if prototype
+                    else list(bar.get("detail_slot_profile", []))
+                )
 
         return {
             "bar_ms": float(bar_ms),
@@ -1213,7 +1647,6 @@ class FeatureExtractor:
         bar_index = max(0, min(bar_index, len(bars) - 1))
         return bars[bar_index]
 
-
     def apply_bar_pattern_cell_filter(
         self,
         notes,
@@ -1225,7 +1658,7 @@ class FeatureExtractor:
         section_divisor_state=None,
         beat_family_state=None,
     ):
-        print("应用 bar-level pattern cell...")
+        print("应用 prototype-guided candidate selection...")
 
         if not notes or bpm <= 0:
             return []
@@ -1260,124 +1693,263 @@ class FeatureExtractor:
                 continue
             notes_by_bar.setdefault(bar_index, []).append(note)
 
-        adjusted_notes = list(passthrough_notes)
-        remapped_count = 0
+        selected_notes = list(passthrough_notes)
+        selected_count = 0
+        filled_count = 0
+        dropped_count = 0
 
         for bar_index in sorted(notes_by_bar.keys()):
             bar_cell = bars[bar_index]
-            chosen_family = str(bar_cell.get("chosen_family", "neutral"))
             active_slots = [int(value) for value in bar_cell.get("active_slots", [])]
-            slot_ms = float(bar_cell.get("slot_ms", bar_pattern_cells.get("slot_ms", 0.0)))
-            if chosen_family != "binary" or not active_slots or slot_ms <= 0.0:
-                adjusted_notes.extend(notes_by_bar[bar_index])
+            slot_ms = float(
+                bar_cell.get("slot_ms", bar_pattern_cells.get("slot_ms", 0.0))
+            )
+            if not active_slots or slot_ms <= 0.0:
+                selected_notes.extend(
+                    sorted(
+                        notes_by_bar[bar_index],
+                        key=lambda item: float(item.get("aligned_time", 0.0)),
+                    )
+                )
                 continue
 
             bar_start_ms = float(bar_cell.get("start_ms", 0.0))
-            section_state_divisor = int(bar_cell.get("section_state_divisor", 0))
+            raw_slot_scores = np.asarray(
+                bar_cell.get("slot_scores", []), dtype=np.float32
+            )
+            total_slots = max(len(raw_slot_scores), max(active_slots) + 1)
             prototype_slot_template = list(bar_cell.get("prototype_slot_template", []))
             if not prototype_slot_template:
-                prototype_slot_template = [0] * max(active_slots + [0, 0])
-            template_capacity = {
-                int(slot_index): max(
-                    1,
-                    int(prototype_slot_template[slot_index]) + int(self.config.BAR_PATTERN_PROTOTYPE_TEMPLATE_SLACK)
-                    if slot_index < len(prototype_slot_template)
-                    else 1,
+                prototype_slot_template = [0] * total_slots
+            detail_slot_ms = float(bar_cell.get("detail_slot_ms", 0.0))
+            raw_detail_slot_scores = np.asarray(
+                bar_cell.get("detail_slot_scores", []), dtype=np.float32
+            )
+            prototype_detail_template = set(
+                int(value) for value in bar_cell.get("prototype_detail_template", [])
+            )
+            if not prototype_detail_template:
+                prototype_detail_template = set(
+                    int(value) for value in bar_cell.get("preliminary_detail_slots", [])
                 )
-                for slot_index in active_slots
-            }
-            assigned_counts = {int(slot_index): 0 for slot_index in active_slots}
 
-            for source_note in sorted(notes_by_bar[bar_index], key=lambda item: float(item.get("aligned_time", 0.0))):
+            keep_tolerance_ms = float(slot_ms) * float(
+                self.config.BAR_PATTERN_SELECTION_TOLERANCE_RATIO
+            )
+            fill_tolerance_ms = float(slot_ms) * float(
+                self.config.BAR_PATTERN_FILL_TOLERANCE_RATIO
+            )
+            detail_tolerance_ms = float(slot_ms) * float(
+                self.config.BAR_PATTERN_DETAIL_TOLERANCE_RATIO
+            )
+            detail_template_tolerance_ms = float(detail_slot_ms) * float(
+                self.config.BAR_PATTERN_DETAIL_TEMPLATE_TOLERANCE_RATIO
+            )
+            max_notes_per_slot = max(1, int(self.config.BAR_PATTERN_MAX_NOTES_PER_SLOT))
+            template_slack = int(self.config.BAR_PATTERN_PROTOTYPE_TEMPLATE_SLACK)
+            max_score = (
+                float(np.max(raw_slot_scores)) if raw_slot_scores.size > 0 else 0.0
+            )
+            detail_max_score = (
+                float(np.max(raw_detail_slot_scores))
+                if raw_detail_slot_scores.size > 0
+                else 0.0
+            )
+
+            slot_entries = []
+            sorted_bar_notes = sorted(
+                notes_by_bar[bar_index],
+                key=lambda item: float(item.get("aligned_time", 0.0)),
+            )
+            for note_index, source_note in enumerate(sorted_bar_notes):
                 note = dict(source_note)
-                note_family = self._classify_beat_family(int(note.get("snap_divisor", 0)))
-                remap_enabled = False
-                note_divisor = int(note.get("snap_divisor", 0))
-                if note_family == "triplet" and bool(self.config.BAR_PATTERN_ENABLE_TRIPLET_REMAP):
-                    remap_enabled = True
-                elif (
-                    bool(self.config.BAR_PATTERN_ENABLE_FINE_BINARY_REMAP)
-                    and note_divisor > max(2, section_state_divisor)
-                ):
-                    remap_enabled = True
-
-                if not remap_enabled:
-                    adjusted_notes.append(note)
-                    continue
-
                 note_time_ms = float(note.get("aligned_time", 0.0))
-                current_slot_index = int(round((note_time_ms - bar_start_ms) / slot_ms))
-                current_slot_index = max(0, min(current_slot_index, max(active_slots + [0])))
-                if current_slot_index in active_slots:
-                    adjusted_notes.append(note)
-                    assigned_counts[int(current_slot_index)] = int(assigned_counts.get(int(current_slot_index), 0) + 1)
-                    continue
-
-                slot_candidates = []
-                best_delta_ms = None
-                for slot_index in active_slots:
-                    slot_time_ms = bar_start_ms + float(slot_index) * slot_ms
-                    delta_ms = abs(slot_time_ms - note_time_ms)
-                    slot_candidates.append((int(slot_index), float(slot_time_ms), float(delta_ms)))
-                    if best_delta_ms is None or delta_ms < best_delta_ms:
-                        best_delta_ms = float(delta_ms)
-
-                tie_margin_ms = float(slot_ms) * float(self.config.BAR_PATTERN_PROTOTYPE_TEMPLATE_TIE_MARGIN_RATIO)
-                candidate_slots = [
-                    item
-                    for item in slot_candidates
-                    if item[2] <= float(best_delta_ms or 0.0) + tie_margin_ms
-                ] or slot_candidates
-
-                best_slot = candidate_slots[0][0]
-                best_time_ms = candidate_slots[0][1]
-                best_cost = None
-                for slot_index, slot_time_ms, delta_ms in candidate_slots:
-                    overflow = max(
-                        0,
-                        assigned_counts.get(int(slot_index), 0)
-                        - template_capacity.get(int(slot_index), 1)
-                        + 1,
+                note_magnitude = max(1.0, float(note.get("magnitude", 0.0)))
+                nearest_slot = int(round((note_time_ms - bar_start_ms) / slot_ms))
+                nearest_slot = max(0, min(nearest_slot, total_slots - 1))
+                nearest_active_slot = min(
+                    active_slots,
+                    key=lambda slot_index: abs(
+                        (bar_start_ms + float(slot_index) * slot_ms) - note_time_ms
+                    ),
+                )
+                delta_to_active_ms = abs(
+                    (bar_start_ms + float(nearest_active_slot) * slot_ms) - note_time_ms
+                )
+                nearest_detail_slot = 0
+                delta_to_detail_ms = 0.0
+                detail_score = 0.0
+                if detail_slot_ms > 0.0 and raw_detail_slot_scores.size > 0:
+                    nearest_detail_slot = int(
+                        round((note_time_ms - bar_start_ms) / detail_slot_ms)
                     )
-                    overflow_penalty = (
-                        float(slot_ms)
-                        * float(self.config.BAR_PATTERN_PROTOTYPE_TEMPLATE_PENALTY)
-                        * float(overflow)
+                    nearest_detail_slot = max(
+                        0, min(nearest_detail_slot, raw_detail_slot_scores.size - 1)
                     )
-                    cost = float(delta_ms + overflow_penalty)
-                    if best_cost is None or cost < best_cost:
-                        best_cost = cost
-                        best_slot = int(slot_index)
-                        best_time_ms = float(slot_time_ms)
+                    delta_to_detail_ms = abs(
+                        (bar_start_ms + float(nearest_detail_slot) * detail_slot_ms)
+                        - note_time_ms
+                    )
+                    detail_score = float(raw_detail_slot_scores[nearest_detail_slot])
+                slot_entries.append(
+                    {
+                        "index": int(note_index),
+                        "note": note,
+                        "nearest_slot": int(nearest_slot),
+                        "nearest_active_slot": int(nearest_active_slot),
+                        "delta_to_active_ms": float(delta_to_active_ms),
+                        "nearest_detail_slot": int(nearest_detail_slot),
+                        "delta_to_detail_ms": float(delta_to_detail_ms),
+                        "detail_score": float(detail_score),
+                        "magnitude": float(note_magnitude),
+                    }
+                )
 
-                nearest_delta_ms = abs(best_time_ms - note_time_ms)
+            used_indices = set()
+            selected_entries = []
+            detail_entries = []
+            selected_slot_set = set()
 
-                tolerance_ms = slot_ms * float(self.config.BAR_PATTERN_SNAP_TOLERANCE_RATIO)
-                if nearest_delta_ms > tolerance_ms:
-                    adjusted_notes.append(note)
+            for slot_index in active_slots:
+                slot_index = int(slot_index)
+                slot_score = (
+                    float(raw_slot_scores[slot_index])
+                    if slot_index < len(raw_slot_scores)
+                    else 0.0
+                )
+                slot_score_ratio = (slot_score / max_score) if max_score > 1e-6 else 0.0
+                if slot_score_ratio < float(
+                    self.config.BAR_PATTERN_SLOT_KEEP_MIN_RATIO
+                ):
                     continue
 
-                if abs(best_time_ms - note_time_ms) <= 0.5:
-                    adjusted_notes.append(note)
-                    assigned_counts[int(best_slot)] = int(assigned_counts.get(int(best_slot), 0) + 1)
-                    continue
+                target_count = 1
+                if slot_index < len(prototype_slot_template):
+                    target_count = max(
+                        1,
+                        min(
+                            max_notes_per_slot,
+                            int(prototype_slot_template[slot_index]) + template_slack,
+                        ),
+                    )
 
-                time_shift_ms = best_time_ms - note_time_ms
-                note["aligned_time"] = float(best_time_ms)
-                if float(note.get("duration", 0.0)) > 0.0:
-                    note["end_time"] = float(note.get("end_time", note_time_ms)) + time_shift_ms
-                else:
-                    note["end_time"] = note["aligned_time"] + float(note.get("duration", 0.0))
-                note["snap_divisor"] = 1 if (best_slot % 2 == 0) else 2
-                adjusted_notes.append(note)
-                assigned_counts[int(best_slot)] = int(assigned_counts.get(int(best_slot), 0) + 1)
-                remapped_count += 1
+                slot_candidates = [
+                    entry
+                    for entry in slot_entries
+                    if entry["index"] not in used_indices
+                    and entry["nearest_active_slot"] == int(slot_index)
+                    and entry["delta_to_active_ms"] <= keep_tolerance_ms
+                ]
+                slot_candidates.sort(
+                    key=lambda entry: (
+                        entry["delta_to_active_ms"],
+                        -entry["magnitude"],
+                    )
+                )
 
-        adjusted_notes.sort(key=lambda item: float(item.get("aligned_time", 0.0)))
-        print(f"bar pattern cell: 重映射了 {remapped_count}/{len(notes)} 个音符")
-        return adjusted_notes
+                selected_here = 0
+                for entry in slot_candidates[:target_count]:
+                    selected_entries.append((int(slot_index), entry, False))
+                    used_indices.add(int(entry["index"]))
+                    selected_here += 1
+                    selected_slot_set.add(int(slot_index))
 
-    def _build_section_divisor_weight_map(self, time_ms, divisor_weights, section_divisor_state, beat_family_state=None):
+                while selected_here < target_count and slot_score_ratio >= float(
+                    self.config.BAR_PATTERN_SLOT_FILL_MIN_RATIO
+                ):
+                    fill_candidates = [
+                        entry
+                        for entry in slot_entries
+                        if entry["index"] not in used_indices
+                        and entry["delta_to_active_ms"] <= fill_tolerance_ms
+                    ]
+                    fill_candidates.sort(
+                        key=lambda entry: (
+                            abs(
+                                (bar_start_ms + float(slot_index) * slot_ms)
+                                - float(entry["note"].get("aligned_time", 0.0))
+                            ),
+                            -entry["magnitude"],
+                        )
+                    )
+                    if not fill_candidates:
+                        break
+                    entry = fill_candidates[0]
+                    selected_entries.append((int(slot_index), entry, True))
+                    used_indices.add(int(entry["index"]))
+                    selected_here += 1
+                    selected_slot_set.add(int(slot_index))
+                    filled_count += 1
+
+            max_detail_per_bar = max(
+                0, int(self.config.BAR_PATTERN_DETAIL_MAX_EXTRA_PER_BAR)
+            )
+            if max_detail_per_bar > 0 and max_score > 1e-6:
+                detail_candidates = [
+                    entry
+                    for entry in slot_entries
+                    if entry["index"] not in used_indices
+                    and int(entry["note"].get("snap_divisor", 0)) > 2
+                    and entry["delta_to_active_ms"] <= detail_tolerance_ms
+                    and entry["nearest_active_slot"] in selected_slot_set
+                    and entry["nearest_detail_slot"] in prototype_detail_template
+                    and entry["delta_to_detail_ms"] <= detail_template_tolerance_ms
+                    and (
+                        float(entry["detail_score"]) / detail_max_score
+                        if detail_max_score > 1e-6
+                        else 0.0
+                    )
+                    >= float(self.config.BAR_PATTERN_DETAIL_MIN_SCORE_RATIO)
+                ]
+                detail_candidates.sort(
+                    key=lambda entry: (
+                        entry["delta_to_detail_ms"],
+                        -entry["detail_score"],
+                        -entry["magnitude"],
+                    )
+                )
+                for entry in detail_candidates[:max_detail_per_bar]:
+                    detail_entries.append(entry)
+                    used_indices.add(int(entry["index"]))
+
+            dropped_count += max(
+                0, len(slot_entries) - len(selected_entries) - len(detail_entries)
+            )
+
+            for slot_index, entry, was_fill in selected_entries:
+                note = dict(entry["note"])
+                target_time_ms = bar_start_ms + float(slot_index) * slot_ms
+                if abs(target_time_ms - float(note.get("aligned_time", 0.0))) > 0.5:
+                    time_shift_ms = target_time_ms - float(
+                        note.get("aligned_time", 0.0)
+                    )
+                    note["aligned_time"] = float(target_time_ms)
+                    if float(note.get("duration", 0.0)) > 0.0:
+                        note["end_time"] = (
+                            float(note.get("end_time", target_time_ms)) + time_shift_ms
+                        )
+                    else:
+                        note["end_time"] = note["aligned_time"] + float(
+                            note.get("duration", 0.0)
+                        )
+                    note["snap_divisor"] = 1 if (int(slot_index) % 2 == 0) else 2
+                selected_notes.append(note)
+                selected_count += 1
+
+            for entry in detail_entries:
+                selected_notes.append(dict(entry["note"]))
+                selected_count += 1
+
+        selected_notes.sort(key=lambda item: float(item.get("aligned_time", 0.0)))
+        print(
+            f"prototype-guided candidate selection: 保留 {selected_count}/{len(notes)} 个音符, "
+            f"骨架补点 {filled_count}, 丢弃 {dropped_count}"
+        )
+        return selected_notes
+
+    def _build_section_divisor_weight_map(
+        self, time_ms, divisor_weights, section_divisor_state, beat_family_state=None
+    ):
         base_weights = dict(divisor_weights or {})
         if not section_divisor_state:
             resolved_weights = dict(base_weights)
@@ -1388,17 +1960,30 @@ class FeatureExtractor:
             else:
                 chosen_state = int(window.get("chosen_state_divisor", 0))
                 normalized_scores = window.get("normalized_local_scores", {})
-                anchor_divisors = set(int(value) for value in window.get("anchor_divisors", []))
-                strongest_anchor = min(anchor_divisors) if anchor_divisors else int(chosen_state)
-                strongest_anchor_score = float(normalized_scores.get(int(strongest_anchor), 0.25))
+                anchor_divisors = set(
+                    int(value) for value in window.get("anchor_divisors", [])
+                )
+                strongest_anchor = (
+                    min(anchor_divisors) if anchor_divisors else int(chosen_state)
+                )
+                strongest_anchor_score = float(
+                    normalized_scores.get(int(strongest_anchor), 0.25)
+                )
                 resolved_weights = {}
 
                 for divisor in self.config.BEAT_DIVISORS:
-                    base_weight = float(base_weights.get(int(divisor), self.config.GRID_WEIGHT_PRIORS.get(int(divisor), 0.2)))
+                    base_weight = float(
+                        base_weights.get(
+                            int(divisor),
+                            self.config.GRID_WEIGHT_PRIORS.get(int(divisor), 0.2),
+                        )
+                    )
                     tier = self._map_divisor_to_section_tier(int(divisor))
                     local_scale = float(normalized_scores.get(int(tier), 0.25))
                     if tier > chosen_state:
-                        multiplier = float(self.config.SECTION_STATE_SUPPRESS_FINESCALE_MULTIPLIER)
+                        multiplier = float(
+                            self.config.SECTION_STATE_SUPPRESS_FINESCALE_MULTIPLIER
+                        )
                     elif tier == chosen_state:
                         multiplier = 0.65 + local_scale * 0.55
                     else:
@@ -1406,28 +1991,50 @@ class FeatureExtractor:
                     if int(tier) in anchor_divisors:
                         multiplier *= float(self.config.SECTION_STATE_ANCHOR_BOOST)
                     if int(tier) == int(strongest_anchor):
-                        multiplier *= float(self.config.SECTION_STATE_COARSE_SKELETON_BOOST)
+                        multiplier *= float(
+                            self.config.SECTION_STATE_COARSE_SKELETON_BOOST
+                        )
                     elif int(tier) > int(strongest_anchor):
                         tier_score = float(normalized_scores.get(int(tier), 0.05))
-                        if tier_score < strongest_anchor_score + float(self.config.SECTION_STATE_COARSE_PROTECTION_MARGIN):
-                            multiplier *= float(self.config.SECTION_STATE_FINE_COMPETITION_PENALTY)
-                    resolved_weights[int(divisor)] = base_weight * max(0.05, float(multiplier))
+                        if tier_score < strongest_anchor_score + float(
+                            self.config.SECTION_STATE_COARSE_PROTECTION_MARGIN
+                        ):
+                            multiplier *= float(
+                                self.config.SECTION_STATE_FINE_COMPETITION_PENALTY
+                            )
+                    resolved_weights[int(divisor)] = base_weight * max(
+                        0.05, float(multiplier)
+                    )
 
         if beat_family_state:
             global_family = str(beat_family_state.get("global_family", "neutral"))
             family_window = self._resolve_beat_family_window(time_ms, beat_family_state)
-            chosen_family = str(family_window.get("chosen_family", "neutral")) if family_window else "neutral"
+            chosen_family = (
+                str(family_window.get("chosen_family", "neutral"))
+                if family_window
+                else "neutral"
+            )
             for divisor in list(resolved_weights.keys()):
                 family = self._classify_beat_family(divisor)
                 multiplier = 1.0
-                if family != "neutral" and global_family != "neutral" and family != global_family:
-                    multiplier *= float(self.config.BEAT_FAMILY_GLOBAL_SUPPRESS_MULTIPLIER)
+                if (
+                    family != "neutral"
+                    and global_family != "neutral"
+                    and family != global_family
+                ):
+                    multiplier *= float(
+                        self.config.BEAT_FAMILY_GLOBAL_SUPPRESS_MULTIPLIER
+                    )
                 if family != "neutral" and chosen_family != "neutral":
                     if family == chosen_family:
                         multiplier *= float(self.config.BEAT_FAMILY_WINDOW_MATCH_BOOST)
                     else:
-                        multiplier *= float(self.config.BEAT_FAMILY_WINDOW_SUPPRESS_MULTIPLIER)
-                resolved_weights[int(divisor)] = max(0.01, float(resolved_weights[int(divisor)]) * float(multiplier))
+                        multiplier *= float(
+                            self.config.BEAT_FAMILY_WINDOW_SUPPRESS_MULTIPLIER
+                        )
+                resolved_weights[int(divisor)] = max(
+                    0.01, float(resolved_weights[int(divisor)]) * float(multiplier)
+                )
 
         return resolved_weights
 
@@ -1448,7 +2055,9 @@ class FeatureExtractor:
                 weight = float(divisor_weights.get(int(divisor), 0.0))
             if weight <= 0.0:
                 weight = float(self.config.GRID_WEIGHT_PRIORS.get(int(divisor), 0.2))
-            candidates.append((float(error_ms), int(divisor), float(snapped_pos), weight))
+            candidates.append(
+                (float(error_ms), int(divisor), float(snapped_pos), weight)
+            )
 
         if not candidates:
             return float(time_ms), 0, 0.0
@@ -1553,7 +2162,9 @@ class FeatureExtractor:
 
         for source_note in aligned_notes:
             note = dict(source_note)
-            original_start = float(note.get("aligned_time", note.get("start_time", 0.0)))
+            original_start = float(
+                note.get("aligned_time", note.get("start_time", 0.0))
+            )
             start_weight_map = self._build_section_divisor_weight_map(
                 original_start,
                 divisor_weights,
@@ -1577,7 +2188,9 @@ class FeatureExtractor:
             note["aligned_time"] = snapped_start
             note["snap_divisor"] = snapped_divisor
 
-            original_end = float(note.get("end_time", original_start + note.get("duration", 0.0)))
+            original_end = float(
+                note.get("end_time", original_start + note.get("duration", 0.0))
+            )
             if original_end > original_start:
                 end_weight_map = self._build_section_divisor_weight_map(
                     original_end,
@@ -1606,7 +2219,13 @@ class FeatureExtractor:
         return filtered_notes
 
     def apply_dynamic_density_filter(
-        self, aligned_notes, energy_profile, hop_length, sr, beat_duration_ms, divisor_weights=None
+        self,
+        aligned_notes,
+        energy_profile,
+        hop_length,
+        sr,
+        beat_duration_ms,
+        divisor_weights=None,
     ):
         print("应用动态密度控制...")
 
@@ -1675,8 +2294,17 @@ class FeatureExtractor:
                 valid_snap_notes.sort(
                     key=lambda x: (
                         x.get("magnitude", 0) * 0.7
-                        + float((divisor_weights or {}).get(int(x.get("snap_divisor", 0)), 0.0)) * 0.45,
-                        float((divisor_weights or {}).get(int(x.get("snap_divisor", 0)), 0.0)),
+                        + float(
+                            (divisor_weights or {}).get(
+                                int(x.get("snap_divisor", 0)), 0.0
+                            )
+                        )
+                        * 0.45,
+                        float(
+                            (divisor_weights or {}).get(
+                                int(x.get("snap_divisor", 0)), 0.0
+                            )
+                        ),
                         x["duration"],
                     ),
                     reverse=True,
@@ -1687,7 +2315,9 @@ class FeatureExtractor:
 
         for note in sorted_notes:
             if note["aligned_time"] > current_window_start + window_size_ms:
-                filtered_notes.extend(process_window(window_notes, current_window_start))
+                filtered_notes.extend(
+                    process_window(window_notes, current_window_start)
+                )
                 window_notes = []
                 current_window_start += window_size_ms
                 while note["aligned_time"] > current_window_start + window_size_ms:
@@ -1712,10 +2342,25 @@ class FeatureExtractor:
         kernel = np.ones(window_size, dtype=np.float32) / float(window_size)
         return np.convolve(array, kernel, mode="same").astype(np.float32)
 
-    def _build_energy_context(self, energy_profile, hop_length, sr):
+    def _build_energy_context(self, energy_profile, hop_length, sr, onset_profile=None):
         short_env = np.asarray(energy_profile, dtype=np.float32)
         if short_env.size == 0:
             short_env = np.zeros(1, dtype=np.float32)
+
+        onset_env = np.asarray(
+            onset_profile if onset_profile is not None else short_env, dtype=np.float32
+        )
+        if onset_env.size == 0:
+            onset_env = np.zeros_like(short_env)
+        if onset_env.size != short_env.size:
+            target_index = np.linspace(
+                0.0, max(0, onset_env.size - 1), short_env.size, dtype=np.float32
+            )
+            onset_env = np.interp(
+                target_index,
+                np.arange(onset_env.size, dtype=np.float32),
+                onset_env,
+            ).astype(np.float32)
 
         long_window_frames = max(
             1,
@@ -1729,13 +2374,22 @@ class FeatureExtractor:
         )
         long_env = self._moving_average(short_env, long_window_frames)
         contrast = short_env / np.maximum(long_env, 1e-4)
-        times_ms = np.arange(short_env.size, dtype=np.float32) * float(hop_length) / float(sr) * 1000.0
+        onset_long_env = self._moving_average(onset_env, long_window_frames)
+        onset_contrast = onset_env / np.maximum(onset_long_env, 1e-4)
+        times_ms = (
+            np.arange(short_env.size, dtype=np.float32)
+            * float(hop_length)
+            / float(sr)
+            * 1000.0
+        )
 
         return {
             "times_ms": times_ms,
             "short_env": short_env,
             "long_env": long_env,
             "contrast": contrast,
+            "onset_env": onset_env,
+            "onset_contrast": onset_contrast,
         }
 
     def _sample_context_value(self, times_ms, values, time_ms):
@@ -1758,13 +2412,18 @@ class FeatureExtractor:
         times_ms = energy_context["times_ms"]
         short_env = energy_context["short_env"]
         contrast = energy_context["contrast"]
+        onset_env = energy_context["onset_env"]
 
         for index in range(times_ms.size):
             if (
                 short_env[index] >= self.config.SILENCE_ONSET_ABS_THRESHOLD
                 or contrast[index] >= self.config.SILENCE_ONSET_REL_THRESHOLD
+                or onset_env[index] >= self.config.SILENCE_ONSET_ABS_THRESHOLD
             ):
-                return max(0, int(round(times_ms[index])) - self.config.SILENCE_LEADING_MARGIN_MS)
+                return max(
+                    0,
+                    int(round(times_ms[index])) - self.config.SILENCE_LEADING_MARGIN_MS,
+                )
 
         return 0
 
@@ -1772,18 +2431,20 @@ class FeatureExtractor:
         times_ms = energy_context["times_ms"]
         short_env = energy_context["short_env"]
         contrast = energy_context["contrast"]
+        onset_env = energy_context["onset_env"]
+        onset_contrast = energy_context["onset_contrast"]
 
         window_energy = self._slice_context_values(
-            times_ms,
-            short_env,
-            window_start_ms,
-            window_end_ms,
+            times_ms, short_env, window_start_ms, window_end_ms
         )
         window_contrast = self._slice_context_values(
-            times_ms,
-            contrast,
-            window_start_ms,
-            window_end_ms,
+            times_ms, contrast, window_start_ms, window_end_ms
+        )
+        window_onset = self._slice_context_values(
+            times_ms, onset_env, window_start_ms, window_end_ms
+        )
+        window_onset_contrast = self._slice_context_values(
+            times_ms, onset_contrast, window_start_ms, window_end_ms
         )
 
         if window_energy.size == 0:
@@ -1791,15 +2452,62 @@ class FeatureExtractor:
 
         energy_peak = float(np.max(window_energy))
         energy_mean = float(np.mean(window_energy))
-        contrast_peak = float(np.max(window_contrast)) if window_contrast.size > 0 else 0.0
+        contrast_peak = (
+            float(np.max(window_contrast)) if window_contrast.size > 0 else 0.0
+        )
+        onset_peak = float(np.max(window_onset)) if window_onset.size > 0 else 0.0
+        onset_contrast_peak = (
+            float(np.max(window_onset_contrast))
+            if window_onset_contrast.size > 0
+            else 0.0
+        )
 
         return (
             energy_peak < self.config.SILENCE_ABS_THRESHOLD
             and contrast_peak < self.config.SILENCE_REL_THRESHOLD
             and energy_mean < self.config.SILENCE_ABS_THRESHOLD * 1.05
+            and onset_peak < self.config.SILENCE_ONSET_ABS_THRESHOLD
+            and onset_contrast_peak < self.config.SILENCE_ONSET_REL_THRESHOLD
         )
 
-    def apply_silence_energy_filter(self, note_events, energy_profile, hop_length, sr):
+    def _window_is_persistent_noise(
+        self, energy_context, window_start_ms, window_end_ms
+    ):
+        times_ms = energy_context["times_ms"]
+        short_env = energy_context["short_env"]
+        contrast = energy_context["contrast"]
+        onset_env = energy_context["onset_env"]
+
+        window_energy = self._slice_context_values(
+            times_ms, short_env, window_start_ms, window_end_ms
+        )
+        window_contrast = self._slice_context_values(
+            times_ms, contrast, window_start_ms, window_end_ms
+        )
+        window_onset = self._slice_context_values(
+            times_ms, onset_env, window_start_ms, window_end_ms
+        )
+
+        if window_energy.size == 0:
+            return False
+
+        energy_mean = float(np.mean(window_energy))
+        energy_std = float(np.std(window_energy))
+        contrast_peak = (
+            float(np.max(window_contrast)) if window_contrast.size > 0 else 0.0
+        )
+        onset_peak = float(np.max(window_onset)) if window_onset.size > 0 else 0.0
+
+        return (
+            energy_mean <= float(self.config.PERSISTENT_NOISE_ENERGY_MEAN_MAX)
+            and energy_std <= float(self.config.PERSISTENT_NOISE_ENERGY_STD_MAX)
+            and onset_peak <= float(self.config.PERSISTENT_NOISE_ONSET_MAX)
+            and contrast_peak <= float(self.config.PERSISTENT_NOISE_CONTRAST_MAX)
+        )
+
+    def apply_silence_energy_filter(
+        self, note_events, energy_profile, hop_length, sr, onset_profile=None
+    ):
         print("应用静音检测过滤器...")
 
         if not note_events:
@@ -1808,13 +2516,16 @@ class FeatureExtractor:
         if not self.config.ENABLE_SILENCE_ENERGY_FILTER:
             return list(note_events)
 
-        energy_context = self._build_energy_context(energy_profile, hop_length, sr)
+        energy_context = self._build_energy_context(
+            energy_profile, hop_length, sr, onset_profile
+        )
         leading_start_ms = self._detect_leading_active_start_ms(energy_context)
         window_size_ms = max(125, int(self.config.SILENCE_WINDOW_MS))
 
         filtered_notes = []
         removed_intro = 0
         removed_quiet = 0
+        removed_noise = 0
 
         for note in sorted(note_events, key=lambda item: item["aligned_time"]):
             note_time_ms = int(round(float(note["aligned_time"])))
@@ -1827,12 +2538,19 @@ class FeatureExtractor:
             if self._window_is_quiet(energy_context, window_start_ms, window_end_ms):
                 removed_quiet += 1
                 continue
+            if bool(
+                self.config.ENABLE_PERSISTENT_NOISE_SUPPRESSION
+            ) and self._window_is_persistent_noise(
+                energy_context, window_start_ms, window_end_ms
+            ):
+                removed_noise += 1
+                continue
 
             filtered_notes.append(note)
 
         print(
             f"静音检测过滤: {len(note_events)} -> {len(filtered_notes)} "
-            f"(删除前导静音 {removed_intro}, 删除低能量窗口 {removed_quiet})"
+            f"(删除前导静音 {removed_intro}, 删除低能量窗口 {removed_quiet}, 删除持续底噪 {removed_noise})"
         )
         return filtered_notes
 
@@ -1849,7 +2567,11 @@ class FeatureExtractor:
         for source_note in note_events:
             note = dict(source_note)
             freq_bin = note["frequency_bin"]
-            pitch_class = int((freq_bin / n_mels) * 12) % 12
+            pitch_class = note.get("pitch_class")
+            if pitch_class is None:
+                pitch_class = int((freq_bin / n_mels) * 12) % 12
+            else:
+                pitch_class = int(pitch_class) % 12
 
             if pitch_class in column_mapping:
                 column = column_mapping.index(pitch_class)
@@ -1875,12 +2597,16 @@ class FeatureExtractor:
             counts[note["column"]] += 1
             by_column[note["column"]].append(note)
 
-        target_max = max(1, int(np.ceil(len(window_notes) * self.config.COLUMN_BALANCE_MAX_SHARE)))
+        target_max = max(
+            1, int(np.ceil(len(window_notes) * self.config.COLUMN_BALANCE_MAX_SHARE))
+        )
         if len(window_notes) <= num_columns or max(counts.values()) <= target_max:
             return 0
 
         for notes in by_column.values():
-            notes.sort(key=lambda item: (item.get("magnitude", 0.0), item["aligned_time"]))
+            notes.sort(
+                key=lambda item: (item.get("magnitude", 0.0), item["aligned_time"])
+            )
 
         adjusted_count = 0
         while True:
@@ -2040,14 +2766,20 @@ class FeatureExtractor:
         for note in normalized_notes:
             if id(note) in hold_ids:
                 hold_count += 1
-                note["duration"] = max(note["duration"], self.config.HOLD_NOTE_MIN_DURATION)
-                note["duration"] = min(note["duration"], self.config.HOLD_NOTE_MAX_DURATION)
+                note["duration"] = max(
+                    note["duration"], self.config.HOLD_NOTE_MIN_DURATION
+                )
+                note["duration"] = min(
+                    note["duration"], self.config.HOLD_NOTE_MAX_DURATION
+                )
                 note["end_time"] = note["aligned_time"] + note["duration"]
             else:
                 note["duration"] = 0
                 note["end_time"] = note["aligned_time"]
 
-        actual_ratio = (hold_count / len(normalized_notes) * 100) if normalized_notes else 0
+        actual_ratio = (
+            (hold_count / len(normalized_notes) * 100) if normalized_notes else 0
+        )
         print(f"长条调整后: {hold_count}/{len(normalized_notes)} ({actual_ratio:.1f}%)")
         return normalized_notes
 
@@ -2059,8 +2791,12 @@ class FeatureExtractor:
         print("\n=== 特征提取开始 ===")
 
         onset_profiles = audio_data.get("onset_profiles", {})
-        combined_onset_profile = onset_profiles.get("combined", audio_data["energy_profile"])
-        bpm_info = self.detect_bpm(audio_data["audio"], audio_data["sample_rate"], combined_onset_profile)
+        combined_onset_profile = onset_profiles.get(
+            "combined", audio_data["energy_profile"]
+        )
+        bpm_info = self.detect_bpm(
+            audio_data["audio"], audio_data["sample_rate"], combined_onset_profile
+        )
         beat_path = self.build_dynamic_beat_path(
             combined_onset_profile,
             audio_data["hop_length"],
@@ -2079,13 +2815,15 @@ class FeatureExtractor:
             bpm_info["first_beat_time"],
             combined_onset_profile,
         )
-        transient_layer_metrics, transient_layer_weights = self.build_transient_layer_metrics(
-            audio_data["energy_profile"],
-            audio_data["hop_length"],
-            audio_data["sample_rate"],
-            bpm_info["bpm"],
-            bpm_info["first_beat_time"],
-            onset_profiles,
+        transient_layer_metrics, transient_layer_weights = (
+            self.build_transient_layer_metrics(
+                audio_data["energy_profile"],
+                audio_data["hop_length"],
+                audio_data["sample_rate"],
+                bpm_info["bpm"],
+                bpm_info["first_beat_time"],
+                onset_profiles,
+            )
         )
         combined_divisor_weights = dict(grid_divisor_weights)
         for divisor, transient_weight in transient_layer_weights.items():
@@ -2093,7 +2831,9 @@ class FeatureExtractor:
             if base_weight <= 0.0:
                 combined_divisor_weights[divisor] = transient_weight
             else:
-                combined_divisor_weights[divisor] = base_weight * 0.55 + transient_weight * 0.45
+                combined_divisor_weights[divisor] = (
+                    base_weight * 0.55 + transient_weight * 0.45
+                )
         print(
             "节拍层权重: "
             + ", ".join(
@@ -2182,6 +2922,7 @@ class FeatureExtractor:
             audio_data["energy_profile"],
             audio_data["hop_length"],
             audio_data["sample_rate"],
+            combined_onset_profile,
         )
         mapped_notes = self.map_frequency_to_column(
             silence_filtered_notes, self.config.DEFAULT_COLUMNS
@@ -2217,4 +2958,3 @@ class FeatureExtractor:
                 "hop_length": audio_data["hop_length"],
             },
         }
-

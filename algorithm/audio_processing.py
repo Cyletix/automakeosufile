@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Audio processing: load audio, compute Mel spectrogram, binarize, and extract
 note events without relying on librosa-heavy runtime paths.
@@ -65,7 +66,7 @@ class AudioProcessor:
     def compute_mel_spectrogram(self, y, sr):
         print("计算Mel频谱图...")
 
-        _, _, stft_matrix = signal.stft(
+        frequencies_hz, _, stft_matrix = signal.stft(
             y,
             fs=sr,
             nperseg=self.config.N_FFT,
@@ -83,7 +84,7 @@ class AudioProcessor:
         log_mel -= np.max(log_mel)
         mel_normalized = self._normalize_to_uint8(log_mel)
 
-        return mel_spec, log_mel, mel_normalized
+        return mel_spec, log_mel, mel_normalized, power_spectrogram, frequencies_hz
 
     def _build_mel_filter(self, sr):
         n_fft = self.config.N_FFT
@@ -201,8 +202,12 @@ class AudioProcessor:
 
         def band_slice(ratio_range):
             start_ratio, end_ratio = ratio_range
-            start_index = max(0, min(band_count - 1, int(round(band_count * start_ratio))))
-            end_index = max(start_index + 1, min(band_count, int(round(band_count * end_ratio))))
+            start_index = max(
+                0, min(band_count - 1, int(round(band_count * start_ratio)))
+            )
+            end_index = max(
+                start_index + 1, min(band_count, int(round(band_count * end_ratio)))
+            )
             return mel[start_index:end_index, :]
 
         low_band = band_slice(self.config.ONSET_LOW_BAND_RATIO)
@@ -226,6 +231,52 @@ class AudioProcessor:
             "high": high_profile,
             "combined": combined_profile,
         }
+
+    @staticmethod
+    def _hz_to_midi(frequency_hz):
+        safe_frequency = np.maximum(np.asarray(frequency_hz, dtype=np.float32), 1e-6)
+        return 69.0 + 12.0 * np.log2(safe_frequency / 440.0)
+
+    def compute_pitch_salience_roll(self, power_spectrogram, frequencies_hz):
+        print("计算Pitch Salience Roll...")
+        midi_min = int(self.config.PITCH_MIDI_MIN)
+        midi_max = int(self.config.PITCH_MIDI_MAX)
+        midi_axis = np.arange(midi_min, midi_max + 1, dtype=np.float32)
+        if power_spectrogram.ndim != 2 or power_spectrogram.shape[1] == 0:
+            empty_roll = np.zeros((midi_axis.size, 1), dtype=np.float32)
+            return (
+                empty_roll,
+                np.zeros_like(empty_roll, dtype=np.uint8),
+                midi_axis,
+                np.zeros(1, dtype=np.float32),
+            )
+
+        roll = np.zeros((midi_axis.size, power_spectrogram.shape[1]), dtype=np.float32)
+        valid_mask = frequencies_hz > max(20.0, float(self.config.FMIN))
+        valid_frequencies = frequencies_hz[valid_mask]
+        valid_power = power_spectrogram[valid_mask, :]
+        midi_values = self._hz_to_midi(valid_frequencies)
+        midi_indices = np.round(midi_values).astype(int) - midi_min
+        valid_index_mask = (midi_indices >= 0) & (midi_indices < midi_axis.size)
+        midi_indices = midi_indices[valid_index_mask]
+        valid_power = valid_power[valid_index_mask, :]
+
+        for row_index, midi_index in enumerate(midi_indices.tolist()):
+            roll[int(midi_index), :] += valid_power[row_index, :]
+
+        if roll.size > 0:
+            kernel = np.ones((3, 3), dtype=np.float32) / 9.0
+            roll = signal.convolve2d(roll, kernel, mode="same", boundary="symm").astype(
+                np.float32
+            )
+            roll = np.log1p(np.maximum(roll, 0.0))
+            roll_max = float(np.max(roll))
+            if roll_max > 1e-6:
+                roll /= roll_max
+
+        pitch_normalized = np.clip(np.round(roll * 255.0), 0, 255).astype(np.uint8)
+        pitch_onset_profile = self._positive_diff_profile(np.max(roll, axis=0))
+        return roll, pitch_normalized, midi_axis, pitch_onset_profile
 
     def extract_note_events(self, binary_matrix, log_mel, sr, hop_length):
         print("提取音符事件(含强度检测)...")
@@ -270,6 +321,54 @@ class AudioProcessor:
         print(f"提取到 {len(note_events)} 个音符事件")
         return note_events
 
+    def extract_pitch_note_events(
+        self, binary_matrix, pitch_roll, midi_axis, sr, hop_length
+    ):
+        print("提取Pitch Symbolic候选...")
+        note_events = []
+        n_pitch_bins, _ = binary_matrix.shape
+        time_per_frame = hop_length / sr
+
+        for pitch_bin in range(n_pitch_bins):
+            time_series = binary_matrix[pitch_bin, :]
+            changes = np.diff(np.concatenate(([0], time_series, [0])))
+            starts = np.where(changes == 1)[0]
+            ends = np.where(changes == -1)[0]
+
+            for start_frame, end_frame in zip(starts, ends):
+                duration_frames = end_frame - start_frame
+                duration_ms = duration_frames * time_per_frame * 1000
+                if not (
+                    self.config.MIN_NOTE_DURATION_MS
+                    <= duration_ms
+                    <= self.config.MAX_NOTE_DURATION_MS
+                ):
+                    continue
+
+                start_time = start_frame * time_per_frame * 1000
+                end_time = end_frame * time_per_frame * 1000
+                magnitude = float(np.mean(pitch_roll[pitch_bin, start_frame:end_frame]))
+                pitch_midi = float(midi_axis[pitch_bin])
+                pitch_class = int(round(pitch_midi)) % 12
+                note_events.append(
+                    {
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "duration": duration_ms,
+                        "frequency_bin": int(pitch_bin),
+                        "pitch_midi": pitch_midi,
+                        "pitch_class": pitch_class,
+                        "start_frame": start_frame,
+                        "end_frame": end_frame,
+                        "magnitude": magnitude,
+                        "source": "pitch_salience",
+                    }
+                )
+
+        note_events.sort(key=lambda item: item["start_time"])
+        print(f"提取到 {len(note_events)} 个Pitch候选")
+        return note_events
+
     def _normalize_to_uint8(self, data):
         data_min = float(np.min(data))
         data_max = float(np.max(data))
@@ -289,12 +388,39 @@ class AudioProcessor:
 
     def process_audio(self, audio_path):
         y, sr = self.load_audio(audio_path)
-        mel_spec, log_mel, mel_normalized = self.compute_mel_spectrogram(y, sr)
+        mel_spec, log_mel, mel_normalized, power_spectrogram, frequencies_hz = (
+            self.compute_mel_spectrogram(y, sr)
+        )
         binary_matrix = self.adaptive_binarization(mel_normalized)
+        pitch_roll, pitch_normalized, pitch_midi_axis, pitch_onset_profile = (
+            self.compute_pitch_salience_roll(
+                power_spectrogram,
+                frequencies_hz,
+            )
+        )
+        pitch_binary_matrix = self.adaptive_binarization(pitch_normalized)
         energy_profile = self.calculate_energy(y, self.config.HOP_LENGTH)
         onset_profiles = self.calculate_onset_profiles(mel_spec)
-        note_events = self.extract_note_events(
+        onset_profiles["pitch"] = pitch_onset_profile
+        pitch_blend = float(self.config.PITCH_ONSET_BLEND_WEIGHT)
+        onset_profiles["combined"] = self._normalize_profile(
+            onset_profiles["combined"] * max(0.0, 1.0 - pitch_blend)
+            + pitch_onset_profile * max(0.0, pitch_blend)
+        )
+        mel_note_events = self.extract_note_events(
             binary_matrix, log_mel, sr, self.config.HOP_LENGTH
+        )
+        pitch_note_events = self.extract_pitch_note_events(
+            pitch_binary_matrix,
+            pitch_roll,
+            pitch_midi_axis,
+            sr,
+            self.config.HOP_LENGTH,
+        )
+        note_events = (
+            pitch_note_events
+            if bool(self.config.ENABLE_PITCH_SALIENCE_SOURCE) and pitch_note_events
+            else mel_note_events
         )
 
         return {
@@ -303,6 +429,11 @@ class AudioProcessor:
             "mel_spectrogram": mel_spec,
             "log_mel": log_mel,
             "binary_matrix": binary_matrix,
+            "pitch_salience_roll": pitch_roll,
+            "pitch_binary_matrix": pitch_binary_matrix,
+            "pitch_midi_axis": pitch_midi_axis,
+            "mel_note_events": mel_note_events,
+            "pitch_note_events": pitch_note_events,
             "note_events": note_events,
             "energy_profile": energy_profile,
             "onset_profiles": onset_profiles,

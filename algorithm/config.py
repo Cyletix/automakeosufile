@@ -26,6 +26,11 @@ class Config:
     FMIN: int = 20
     FMAX: int = 8000
 
+    ENABLE_PITCH_SALIENCE_SOURCE: bool = True
+    PITCH_MIDI_MIN: int = 36
+    PITCH_MIDI_MAX: int = 96
+    PITCH_ONSET_BLEND_WEIGHT: float = 0.35
+
     ADAPTIVE_THRESHOLD_BLOCK_SIZE: int = 15
     ADAPTIVE_THRESHOLD_C: float = -8.0
     MORPH_KERNEL_SIZE: int = 2
@@ -85,25 +90,27 @@ class Config:
             3: 0.92,
             4: 0.74,
             6: 0.60,
-            8: 0.38,
-            12: 0.28,
-            16: 0.18,
+            8: 0.48,
+            12: 0.32,
+            16: 0.36,
         }
     )
 
-    TRANSIENT_LAYER_DIVISORS: List[int] = field(default_factory=lambda: [2, 4, 8])
+    TRANSIENT_LAYER_DIVISORS: List[int] = field(default_factory=lambda: [2, 4, 8, 16])
     TRANSIENT_LAYER_PRIORS: Dict[int, float] = field(
         default_factory=lambda: {
             2: 1.00,
             4: 0.70,
-            8: 0.24,
+            8: 0.32,
+            16: 0.18,
         }
     )
     TRANSIENT_DIFF_WEIGHTS: Dict[int, float] = field(
         default_factory=lambda: {
             2: 0.95,
             4: 0.70,
-            8: 0.28,
+            8: 0.36,
+            16: 0.20,
         }
     )
     TRANSIENT_GRADIENT_WEIGHT: float = 0.55
@@ -114,7 +121,9 @@ class Config:
     ONSET_HIGH_BAND_RATIO: Tuple[float, float] = (0.58, 1.0)
     ONSET_COMBINED_WEIGHTS: Tuple[float, float, float] = (0.40, 0.35, 0.25)
 
-    BEAT_FAMILY_BINARY_DIVISORS: List[int] = field(default_factory=lambda: [1, 2, 4, 8, 16])
+    BEAT_FAMILY_BINARY_DIVISORS: List[int] = field(
+        default_factory=lambda: [1, 2, 4, 8, 16]
+    )
     BEAT_FAMILY_TRIPLET_DIVISORS: List[int] = field(default_factory=lambda: [3, 6, 12])
     BEAT_FAMILY_WINDOW_BEATS: int = 8
     BEAT_FAMILY_SWITCH_PENALTY: float = 0.16
@@ -127,14 +136,14 @@ class Config:
     BEAT_FAMILY_BINARY_PRIOR: float = 1.00
     BEAT_FAMILY_TRIPLET_PRIOR: float = 0.68
 
-    SECTION_STATE_DIVISORS: List[int] = field(default_factory=lambda: [1, 2, 4, 8])
+    SECTION_STATE_DIVISORS: List[int] = field(default_factory=lambda: [1, 2, 4, 8, 16])
     SECTION_STATE_WINDOW_BEATS: int = 8
     SECTION_STATE_ALLOW_COARSER_WEIGHT: float = 0.72
     SECTION_STATE_FINE_DIVISOR_PENALTY: float = 0.28
     SECTION_STATE_SWITCH_PENALTY: float = 0.22
     SECTION_STATE_SWITCH_DISTANCE_SCALE: float = 0.18
     SECTION_STATE_STAY_BONUS: float = 0.03
-    SECTION_STATE_SUPPRESS_FINESCALE_MULTIPLIER: float = 0.08
+    SECTION_STATE_SUPPRESS_FINESCALE_MULTIPLIER: float = 0.22
     SECTION_STATE_LOCAL_ENERGY_WEIGHT: float = 0.62
     SECTION_STATE_LOCAL_REPETITION_WEIGHT: float = 0.38
     SECTION_STATE_ANCHOR_RATIO_THRESHOLD: float = 0.58
@@ -147,12 +156,13 @@ class Config:
             1: 1.08,
             2: 1.00,
             4: 0.76,
-            8: 0.18,
+            8: 0.42,
+            16: 0.28,
         }
     )
 
     BAR_PATTERN_BEATS: int = 4
-    BAR_PATTERN_SLOTS_PER_BEAT: int = 2
+    BAR_PATTERN_SLOTS_PER_BEAT: int = 4
     BAR_PATTERN_ONSET_WEIGHT: float = 0.62
     BAR_PATTERN_OCCUPANCY_WEIGHT: float = 0.38
     BAR_PATTERN_SLOT_THRESHOLD: float = 0.56
@@ -177,6 +187,20 @@ class Config:
     BAR_PATTERN_PROTOTYPE_TEMPLATE_PENALTY: float = 0.08
     BAR_PATTERN_PROTOTYPE_TEMPLATE_SLACK: int = 1
     BAR_PATTERN_PROTOTYPE_TEMPLATE_TIE_MARGIN_RATIO: float = 0.18
+    BAR_PATTERN_SELECTION_TOLERANCE_RATIO: float = 0.42
+    BAR_PATTERN_FILL_TOLERANCE_RATIO: float = 0.92
+    BAR_PATTERN_MAX_NOTES_PER_SLOT: int = 3
+    BAR_PATTERN_SLOT_KEEP_MIN_RATIO: float = 0.18
+    BAR_PATTERN_SLOT_FILL_MIN_RATIO: float = 0.34
+    BAR_PATTERN_DETAIL_TOLERANCE_RATIO: float = 0.46
+    BAR_PATTERN_DETAIL_MAX_EXTRA_PER_BAR: int = 6
+    BAR_PATTERN_DETAIL_MIN_SCORE_RATIO: float = 0.38
+    BAR_PATTERN_DETAIL_SLOTS_PER_BEAT: int = 8
+    BAR_PATTERN_DETAIL_SLOT_THRESHOLD: float = 0.50
+    BAR_PATTERN_DETAIL_TEMPLATE_KEEP_RATIO: float = 0.62
+    BAR_PATTERN_DETAIL_TEMPLATE_MAX_SLOTS: int = 6
+    BAR_PATTERN_DETAIL_TEMPLATE_MIN_ASSIGN_BARS: int = 2
+    BAR_PATTERN_DETAIL_TEMPLATE_TOLERANCE_RATIO: float = 0.72
 
     HOLD_NOTE_MIN_DURATION: int = 180
     HOLD_NOTE_MAX_DURATION: int = 800
@@ -188,6 +212,7 @@ class Config:
     ENABLE_TIMING_GRID_FILTER: bool = True
     ENABLE_COLUMN_BALANCE_FILTER: bool = True
     ENABLE_SILENCE_ENERGY_FILTER: bool = True
+    ENABLE_PERSISTENT_NOISE_SUPPRESSION: bool = True
 
     SILENCE_WINDOW_MS: int = 500
     SILENCE_LEADING_MARGIN_MS: int = 80
@@ -195,6 +220,10 @@ class Config:
     SILENCE_ONSET_REL_THRESHOLD: float = 1.30
     SILENCE_ABS_THRESHOLD: float = 0.055
     SILENCE_REL_THRESHOLD: float = 0.92
+    PERSISTENT_NOISE_ONSET_MAX: float = 0.03
+    PERSISTENT_NOISE_CONTRAST_MAX: float = 1.08
+    PERSISTENT_NOISE_ENERGY_MEAN_MAX: float = 0.09
+    PERSISTENT_NOISE_ENERGY_STD_MAX: float = 0.02
 
     TIMING_FILTER_HOLD_MIN_DIVISOR: int = 8
     COLUMN_BALANCE_WINDOW_MS: int = 2000

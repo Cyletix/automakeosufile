@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Shared in-process beatmap generation pipeline used by CLI and optimizer.
 """
