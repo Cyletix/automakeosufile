@@ -5,12 +5,14 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 from automakeosufile.config import FeatureConfig, dense_onset_config
 from automakeosufile.features.extractor import ExtractedFeatures, extract_features
 from automakeosufile.output_paths import INSPECT_OUTPUT_DIR
 from automakeosufile.parsers.osu_mania import OsuFileData, parse_osu_file
+from automakeosufile.tools.inspect_sample import _apply_onset_overrides
 
 
 @dataclass(slots=True)
@@ -20,6 +22,8 @@ class AlignmentResult:
     correlation_score: float
     aligned_times_ms: list[float]
     original_times_ms: list[float]
+    searched_offsets_ms: list[float]
+    searched_scores: list[float]
 
 
 def estimate_best_offset(
@@ -58,9 +62,13 @@ def estimate_best_offset(
     )
     best_offset_frames = 0
     best_score = float("-inf")
+    searched_offsets_ms: list[float] = []
+    searched_scores: list[float] = []
 
     for lag in range(-max_offset_frames, max_offset_frames + 1):
         score = _lagged_dot(onset_signal, reference_signal, lag)
+        searched_offsets_ms.append(lag * hop_length / sample_rate * 1000.0)
+        searched_scores.append(float(score))
         if score > best_score:
             best_score = score
             best_offset_frames = lag
@@ -73,6 +81,8 @@ def estimate_best_offset(
         correlation_score=float(best_score),
         aligned_times_ms=aligned_times_ms,
         original_times_ms=[float(time_ms) for time_ms in reference_times_ms],
+        searched_offsets_ms=searched_offsets_ms,
+        searched_scores=searched_scores,
     )
 
 
@@ -116,6 +126,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=500.0,
         help="互相关搜索的最大偏移范围（毫秒），默认 500",
     )
+    parser.add_argument("--onset-delta", type=float)
+    parser.add_argument("--onset-wait", type=int)
+    parser.add_argument("--onset-pre-max", type=int)
+    parser.add_argument("--onset-post-max", type=int)
+    parser.add_argument("--onset-pre-avg", type=int)
+    parser.add_argument("--onset-post-avg", type=int)
+    parser.add_argument("--onset-aggregate", choices=["mean", "median"])
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -128,6 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     config = dense_onset_config() if args.dense_onset else FeatureConfig()
+    config = _apply_onset_overrides(config, args)
     result, osu_data, features = align_osu_to_audio(
         osu_path=args.osu,
         audio_path=args.audio,
@@ -138,6 +156,8 @@ def main() -> int:
     output_dir = args.output_dir / _safe_stem(args.osu)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "offset_alignment.json"
+    plot_path = output_dir / "offset_correlation.png"
+    _save_correlation_plot(plot_path, result)
     payload = {
         "osu_path": str(args.osu),
         "audio_path": str(features.audio_path),
@@ -146,6 +166,18 @@ def main() -> int:
         "sample_rate": features.sample_rate,
         "hop_length": config.hop_length,
         "max_offset_ms": args.max_offset_ms,
+        "feature_config": {
+            "onset_aggregate": config.onset_aggregate,
+            "onset_delta": config.onset_delta,
+            "onset_wait": config.onset_wait,
+            "onset_pre_max": config.onset_pre_max,
+            "onset_post_max": config.onset_post_max,
+            "onset_pre_avg": config.onset_pre_avg,
+            "onset_post_avg": config.onset_post_avg,
+        },
+        "artifacts": {
+            "offset_correlation_plot": str(plot_path),
+        },
         "alignment": asdict(result),
     }
     output_path.write_text(
@@ -156,6 +188,7 @@ def main() -> int:
     print(f"Best offset: {result.offset_ms:.2f} ms ({result.offset_frames} frames)")
     print(f"Correlation score: {result.correlation_score:.4f}")
     print(f"Aligned note count: {len(result.aligned_times_ms)}")
+    print(f"Saved correlation plot: {plot_path}")
     print(f"Saved alignment: {output_path}")
     return 0
 
@@ -181,6 +214,30 @@ def _normalize_signal(values: np.ndarray) -> np.ndarray:
 def _smooth_reference_signal(reference_signal: np.ndarray) -> np.ndarray:
     kernel = np.array([0.25, 0.5, 1.0, 0.5, 0.25], dtype=np.float64)
     return np.convolve(reference_signal, kernel, mode="same")
+
+
+def _save_correlation_plot(output_path: Path, result: AlignmentResult) -> Path:
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(result.searched_offsets_ms, result.searched_scores, color="#4ea1ff")
+    ax.axvline(result.offset_ms, color="#ff7f0e", linestyle="--", linewidth=1.5)
+    ax.scatter(
+        [result.offset_ms], [result.correlation_score], color="#ff7f0e", zorder=3
+    )
+    ax.set_title("Offset cross-correlation curve")
+    ax.set_xlabel("Offset (ms)")
+    ax.set_ylabel("Correlation score")
+    ax.grid(alpha=0.25)
+    ax.text(
+        result.offset_ms,
+        result.correlation_score,
+        f"  best={result.offset_ms:.2f} ms",
+        color="#ff7f0e",
+        va="bottom",
+    )
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+    return output_path
 
 
 def _safe_stem(path: Path) -> str:

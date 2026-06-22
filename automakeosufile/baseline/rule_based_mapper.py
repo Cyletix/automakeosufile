@@ -27,10 +27,11 @@ class RuleBasedMapper:
         config: FeatureConfig,
         key_count: int = 6,
         smooth_frames: int = 1,
-        chord_relative_threshold: float = 0.7,
-        chord_absolute_threshold_ratio: float = 0.35,
-        chord_absolute_percentile: float = 75.0,
-        max_chord_size: int = 3,
+        max_chord_size: int = 4,
+        high_energy_percentile: float = 95.0,
+        medium_energy_percentile: float = 80.0,
+        high_energy_chord_size: int = 4,
+        medium_energy_chord_size: int = 2,
         hold_min_duration_ms: int = 180,
         hold_relative_threshold: float = 0.45,
         hold_stability_threshold: float = 0.60,
@@ -38,13 +39,15 @@ class RuleBasedMapper:
         self.config = config
         self.key_count = key_count
         self.smooth_frames = max(0, smooth_frames)
-        self.chord_relative_threshold = chord_relative_threshold
-        self.chord_absolute_threshold_ratio = chord_absolute_threshold_ratio
-        self.chord_absolute_percentile = chord_absolute_percentile
         self.max_chord_size = max(1, max_chord_size)
+        self.high_energy_percentile = high_energy_percentile
+        self.medium_energy_percentile = medium_energy_percentile
+        self.high_energy_chord_size = max(1, high_energy_chord_size)
+        self.medium_energy_chord_size = max(1, medium_energy_chord_size)
         self.hold_min_duration_ms = hold_min_duration_ms
         self.hold_relative_threshold = hold_relative_threshold
         self.hold_stability_threshold = hold_stability_threshold
+        self.lane_busy_until = {lane: 0 for lane in range(self.key_count)}
 
     def generate_notes(
         self, osu_data: OsuFileData, features: ExtractedFeatures
@@ -56,35 +59,46 @@ class RuleBasedMapper:
             raise ValueError("Reference beatmap has no uninherited timing points")
 
         raw_times_ms = [float(value) for value in features.onset_times * 1000]
-        snapped_times_ms = [
-            self._snap_time_ms(value, control_points) for value in raw_times_ms
-        ]
+        snapped_times_ms = sorted(
+            set(self._snap_time_ms(value, control_points) for value in raw_times_ms)
+        )
         next_onset_time_by_time = self._build_next_onset_time_lookup(snapped_times_ms)
         harmonic_cqt = features.cqt_magnitude
         lane_energy = self._lane_energy_matrix(harmonic_cqt)
-        absolute_lane_threshold = self._absolute_lane_threshold(lane_energy)
+        lane_energy_baseline = self._lane_energy_baseline(lane_energy)
+        high_energy_threshold = float(
+            np.percentile(features.rms, self.high_energy_percentile)
+        )
+        medium_energy_threshold = float(
+            np.percentile(features.rms, self.medium_energy_percentile)
+        )
 
         notes: list[ManiaNote] = []
-        used_pairs: set[tuple[int, int]] = set()
-        used_lanes_per_time: dict[int, set[int]] = {}
+        self.lane_busy_until = {lane: 0 for lane in range(self.key_count)}
 
         for snapped_time_ms in snapped_times_ms:
             frame_index = self._frame_index(snapped_time_ms, features)
+            rms_frame_index = self._rms_frame_index(snapped_time_ms, features)
+            max_notes_for_time = self._max_notes_for_time(
+                rms_value=float(features.rms[rms_frame_index]),
+                high_energy_threshold=high_energy_threshold,
+                medium_energy_threshold=medium_energy_threshold,
+            )
+            available_lanes = self._available_lanes(snapped_time_ms)
+            if not available_lanes:
+                continue
             smoothed_lane_scores = self._smoothed_lane_scores(lane_energy, frame_index)
-            lane_scores = self._lane_scores(smoothed_lane_scores)
+            lane_scores = self._lane_scores(
+                smoothed_lane_scores=smoothed_lane_scores,
+                lane_energy_baseline=lane_energy_baseline,
+                available_lanes=available_lanes,
+            )
             selected_lanes = self._select_lanes(
-                snapped_time_ms=snapped_time_ms,
                 lane_scores=lane_scores,
-                used_lanes_per_time=used_lanes_per_time,
-                absolute_lane_threshold=absolute_lane_threshold,
+                max_notes_for_time=max_notes_for_time,
             )
 
-            for lane in selected_lanes:
-                pair = (snapped_time_ms, lane)
-                if pair in used_pairs:
-                    continue
-                used_pairs.add(pair)
-                used_lanes_per_time.setdefault(snapped_time_ms, set()).add(lane)
+            for lane, _score in selected_lanes:
                 hold_end_time_ms = self._estimate_hold_end_time_ms(
                     start_time_ms=snapped_time_ms,
                     next_onset_time_ms=next_onset_time_by_time.get(snapped_time_ms),
@@ -102,6 +116,7 @@ class RuleBasedMapper:
                         end_time_ms=hold_end_time_ms,
                     )
                 )
+                self.lane_busy_until[lane] = hold_end_time_ms or snapped_time_ms
 
         notes.sort(key=lambda note: (note.time_ms, note.lane))
         return notes
@@ -140,10 +155,31 @@ class RuleBasedMapper:
             ),
         )
 
+    def _rms_frame_index(
+        self, snapped_time_ms: int, features: ExtractedFeatures
+    ) -> int:
+        return min(
+            len(features.rms) - 1,
+            max(
+                0,
+                int(
+                    round(
+                        (snapped_time_ms / 1000)
+                        * features.sample_rate
+                        / self.config.hop_length
+                    )
+                ),
+            ),
+        )
+
     def _lane_energy_matrix(self, cqt_magnitude: np.ndarray) -> np.ndarray:
         chunks = np.array_split(cqt_magnitude, self.key_count, axis=0)
         lane_energy = np.vstack([np.sum(chunk, axis=0) for chunk in chunks])
         return lane_energy
+
+    def _lane_energy_baseline(self, lane_energy: np.ndarray) -> np.ndarray:
+        baseline = np.mean(lane_energy, axis=1)
+        return np.maximum(baseline, 1e-6)
 
     def _build_next_onset_time_lookup(
         self, snapped_times_ms: list[int]
@@ -167,61 +203,46 @@ class RuleBasedMapper:
             return lane_energy[:, center_frame_index]
         return np.mean(window, axis=1)
 
-    def _lane_scores(self, lane_vector: np.ndarray) -> list[tuple[int, float]]:
-        scores = []
-        for lane, score in enumerate(lane_vector):
-            scores.append((lane, float(score)))
+    def _available_lanes(self, snapped_time_ms: int) -> list[int]:
+        return [
+            lane
+            for lane in range(self.key_count)
+            if snapped_time_ms >= self.lane_busy_until.get(lane, 0)
+        ]
+
+    def _lane_scores(
+        self,
+        smoothed_lane_scores: np.ndarray,
+        lane_energy_baseline: np.ndarray,
+        available_lanes: list[int],
+    ) -> list[tuple[int, float]]:
+        scores: list[tuple[int, float]] = []
+        for lane in available_lanes:
+            whitened_score = float(
+                smoothed_lane_scores[lane] / lane_energy_baseline[lane]
+            )
+            scores.append((lane, whitened_score))
         scores.sort(key=lambda item: item[1], reverse=True)
         return scores
 
-    def _absolute_lane_threshold(self, lane_energy: np.ndarray) -> float:
-        flattened = lane_energy.reshape(-1)
-        percentile_value = float(
-            np.percentile(flattened, self.chord_absolute_percentile)
-        )
-        return percentile_value * self.chord_absolute_threshold_ratio
+    def _max_notes_for_time(
+        self,
+        rms_value: float,
+        high_energy_threshold: float,
+        medium_energy_threshold: float,
+    ) -> int:
+        if rms_value >= high_energy_threshold:
+            return min(self.max_chord_size, self.high_energy_chord_size)
+        if rms_value >= medium_energy_threshold:
+            return min(self.max_chord_size, self.medium_energy_chord_size)
+        return 1
 
     def _select_lanes(
         self,
-        snapped_time_ms: int,
         lane_scores: list[tuple[int, float]],
-        used_lanes_per_time: dict[int, set[int]],
-        absolute_lane_threshold: float,
-    ) -> list[int]:
-        occupied = used_lanes_per_time.get(snapped_time_ms, set())
-        remaining_capacity = self.max_chord_size - len(occupied)
-        if remaining_capacity <= 0:
-            return []
-        selected: list[int] = []
-        top_score = lane_scores[0][1] if lane_scores else 0.0
-
-        for lane, score in lane_scores:
-            if lane not in occupied:
-                selected.append(lane)
-                top_score = score
-                break
-
-        if not selected:
-            return []
-
-        if len(selected) >= remaining_capacity:
-            return selected
-
-        if len(lane_scores) > 1 and top_score > 0:
-            for lane, score in lane_scores:
-                if lane in occupied or lane == selected[0]:
-                    continue
-                if len(selected) >= remaining_capacity:
-                    break
-                if (
-                    score >= top_score * self.chord_relative_threshold
-                    or score >= absolute_lane_threshold
-                ):
-                    selected.append(lane)
-                if len(selected) >= remaining_capacity:
-                    break
-
-        return selected
+        max_notes_for_time: int,
+    ) -> list[tuple[int, float]]:
+        return lane_scores[: max(0, max_notes_for_time)]
 
     def _estimate_hold_end_time_ms(
         self,
@@ -304,28 +325,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="CQT 轨道判定时向前后平滑的帧数，默认 1",
     )
     parser.add_argument(
-        "--chord-relative-threshold",
-        type=float,
-        default=0.7,
-        help="第二高轨能量相对于第一高轨的阈值，超过则生成多押，默认 0.7",
-    )
-    parser.add_argument(
-        "--chord-absolute-threshold-ratio",
-        type=float,
-        default=0.35,
-        help="基于全局轨道能量分布的绝对阈值比例，超过即允许生成额外多押，默认 0.35",
-    )
-    parser.add_argument(
-        "--chord-absolute-percentile",
-        type=float,
-        default=75.0,
-        help="计算绝对阈值时使用的全局分位数，默认 75",
-    )
-    parser.add_argument(
         "--max-chord-size",
         type=int,
-        default=3,
-        help="单个时间点最多生成多少个按键，默认 3",
+        default=4,
+        help="绝对高能区允许的最大按键数上限，默认 4",
+    )
+    parser.add_argument(
+        "--high-energy-percentile",
+        type=float,
+        default=95.0,
+        help="Top 5%% 高能区阈值分位数，默认 95",
+    )
+    parser.add_argument(
+        "--medium-energy-percentile",
+        type=float,
+        default=80.0,
+        help="Top 20%% 中高能区阈值分位数，默认 80",
+    )
+    parser.add_argument(
+        "--high-energy-chord-size",
+        type=int,
+        default=4,
+        help="绝对高能区允许的最大和弦数，默认 4",
+    )
+    parser.add_argument(
+        "--medium-energy-chord-size",
+        type=int,
+        default=2,
+        help="中高能区允许的最大和弦数，默认 2",
     )
     parser.add_argument(
         "--hold-min-duration-ms",
@@ -368,10 +395,11 @@ def main() -> int:
         config=config,
         key_count=args.key_count,
         smooth_frames=args.smooth_frames,
-        chord_relative_threshold=args.chord_relative_threshold,
-        chord_absolute_threshold_ratio=args.chord_absolute_threshold_ratio,
-        chord_absolute_percentile=args.chord_absolute_percentile,
         max_chord_size=args.max_chord_size,
+        high_energy_percentile=args.high_energy_percentile,
+        medium_energy_percentile=args.medium_energy_percentile,
+        high_energy_chord_size=args.high_energy_chord_size,
+        medium_energy_chord_size=args.medium_energy_chord_size,
         hold_min_duration_ms=args.hold_min_duration_ms,
         hold_relative_threshold=args.hold_relative_threshold,
         hold_stability_threshold=args.hold_stability_threshold,
@@ -395,7 +423,7 @@ def main() -> int:
     print(f"Generated beatmap: {output_path}")
     print(f"Generated notes: {len(notes)}")
     print(
-        f"Mapping params: key_count={args.key_count} smooth_frames={args.smooth_frames} chord_relative_threshold={args.chord_relative_threshold} chord_absolute_threshold_ratio={args.chord_absolute_threshold_ratio} max_chord_size={args.max_chord_size} hold_min_duration_ms={args.hold_min_duration_ms}"
+        f"Mapping params: key_count={args.key_count} smooth_frames={args.smooth_frames} high_energy_percentile={args.high_energy_percentile} medium_energy_percentile={args.medium_energy_percentile} high_energy_chord_size={args.high_energy_chord_size} medium_energy_chord_size={args.medium_energy_chord_size} max_chord_size={args.max_chord_size} hold_min_duration_ms={args.hold_min_duration_ms}"
     )
     return 0
 

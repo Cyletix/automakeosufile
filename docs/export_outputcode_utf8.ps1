@@ -1,13 +1,34 @@
 $root = "D:\OneDrive\Project\AutoMakeosuFile"
 $output = Join-Path $root "docs\outputcode.md"
-$targets = @(
-    (Join-Path $root "main.py")
-) + (
-    Get-ChildItem -Path (Join-Path $root "automakeosufile") -Recurse -File -Filter *.py |
+$automakeTargets = Get-ChildItem -Path (Join-Path $root "automakeosufile") -Recurse -File -Filter *.py |
+    Where-Object { $_.FullName -notmatch '\\__pycache__\\' } |
+    Sort-Object FullName |
+    Select-Object -ExpandProperty FullName
+
+$algorithmTargets = Get-ChildItem -Path (Join-Path $root "algorithm") -Recurse -File -Filter *.py |
+    Where-Object { $_.FullName -notmatch '\\__pycache__\\' } |
+    Sort-Object FullName |
+    Select-Object -ExpandProperty FullName
+
+$alignmentTargets = @()
+if (Test-Path (Join-Path $root "alignment")) {
+    $alignmentTargets = Get-ChildItem -Path (Join-Path $root "alignment") -Recurse -File -Filter *.py |
         Where-Object { $_.FullName -notmatch '\\__pycache__\\' } |
         Sort-Object FullName |
         Select-Object -ExpandProperty FullName
-)
+}
+
+$trainingTargets = @()
+if (Test-Path (Join-Path $root "training")) {
+    $trainingTargets = Get-ChildItem -Path (Join-Path $root "training") -Recurse -File -Filter *.py |
+        Where-Object { $_.FullName -notmatch '\\__pycache__\\' } |
+        Sort-Object FullName |
+        Select-Object -ExpandProperty FullName
+}
+
+$targets = @(
+    (Join-Path $root "main.py")
+) + $automakeTargets + $algorithmTargets + $alignmentTargets + $trainingTargets
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $utf8Bom = New-Object System.Text.UTF8Encoding($true)
