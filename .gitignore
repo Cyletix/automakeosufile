@@ -5,3 +5,6 @@ __pycache__
 *.osu
 *.mp3
 *.wav
+output/
+artifacts/
+artifacts_*/

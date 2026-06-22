@@ -1,4 +1,66 @@
-# AUTO MAKE OSU FILE (did not finished...)
+# AUTO MAKE OSU FILE
+
+当前仓库正在做一次主流程收口。
+
+## 当前推荐入口
+
+- `main.py`：新的薄入口，默认走单曲检查流程
+- `automakeosufile/tools/inspect_sample.py`：检查一首 `osu!mania` 样本的音频、谱面和基础特征
+
+## 当前推荐主流程目录
+
+- `automakeosufile/dataset/`：歌曲与谱面索引
+- `automakeosufile/parsers/`：`.osu` 解析
+- `automakeosufile/features/`：统一特征提取
+- `automakeosufile/evaluation/`：指标计算与特征叠绘图
+- `automakeosufile/tools/`：调试与检查工具
+
+## 当前推荐的单曲质检命令
+
+```bash
+python -m automakeosufile.tools.inspect_sample --osu "D:\osu!\Songs\...\sample.osu"
+```
+
+这条命令会输出：
+
+- Onset 对齐指标（Precision / Recall / F1）
+- GT Note 的节拍网格吸附误差
+- Lane 分布、和弦规模、Hold 比例与时长指标
+- `onset_overlay.png`（固定 10 秒一段的纵向长图）
+- `chroma_overlay.png`（固定 10 秒一段的纵向长图）
+- `click_track_gt.wav`
+- `click_track_pred.wav`
+- `metrics.json`
+
+## 高密度歌曲推荐参数
+
+对于 `Aragami` 这类高密度样本，可以直接加：
+
+```bash
+python -m automakeosufile.tools.inspect_sample --osu "D:\osu!\Songs\...\sample.osu" --dense-onset
+```
+
+默认输出目录统一为：
+
+- `output/inspect/`：单曲质检图、点击音轨与 `metrics.json`
+- `output/optimize/`：自动调参结果
+- `output/beatmaps/current/`：当前默认生成的 `.osu` 谱面
+- `output/beatmaps/archive/`：历史测试谱面归档
+
+当前内置的高密度 preset 会：
+
+- 把 onset 聚合从 `median` 改为 `mean`
+- 降低 `delta`
+- 缩小 peak-picking 窗口
+
+在当前 `Aragami` 样本上，这一预设把 onset F1 从约 `0.305` 提升到了约 `0.502`。
+
+## 旧代码状态
+
+- 根目录和 `algorithm/`、`fileprocess/`、`密度修正专项/` 下保留了大量历史实验脚本
+- 这些文件暂时不删除，但不再视为主流程入口
+- `fileprocess/osu_file_parse.py` 与 `fileprocess/osu_file_make.py` 已明确退役，避免继续和新主流程混用
+- 整理目标是逐步把可保留能力迁移进 `automakeosufile/` 新骨架
 
 osu自动做谱程序, 对音频文件进行分析后, 自动生成铺面, 由于谱面的数据可以分为时间维度和轨道维度, 我们可以用时频变换得到的频谱图与之对应, 广义来说, 一个频谱图就可以对应一个osu谱面, 只不过想要得到具有可玩性的谱面需要额外一些处理. 整个流程大致分为4步
 
@@ -88,3 +150,10 @@ cent32_interval=bpm/60*1000/16
 ~由于cv2目前不支持python11, 所以用python10比较稳~
 
 现在好像没用到cv2, 应该没有啥限制
+
+
+# 生成代码输出
+
+```powershell
+& pwsh -NoProfile -ExecutionPolicy Bypass -File "docs\export_outputcode_utf8.ps1"
+```
